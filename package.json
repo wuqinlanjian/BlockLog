@@ -1,0 +1,12 @@
+{
+    "name": "blocklog",
+    "version": "1.0.0",
+    "description": "BlockLog plugin with web admin panel",
+    "main": "index.js",
+    "scripts": {},
+    "dependencies": {
+      "bcryptjs": "^2.4.3",
+      "express": "^4.18.2",
+      "express-session": "^1.17.3"
+    }
+  }
