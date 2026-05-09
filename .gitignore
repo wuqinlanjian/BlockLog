@@ -1,0 +1,4 @@
+node_modules/
+plugins/BlockLog/blocklog.db
+plugins/BlockLog/initial_token.txt
+.DS_Store
