@@ -1,0 +1,1250 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BlockLog 管理面板</title>
+    <style>
+        .page-title svg {
+            width: 22px;
+            height: 22px;
+            vertical-align: -4px; 
+        }
+
+        .sidebar .logo svg {
+            width: 24px;
+            height: 24px;
+        }
+
+        .sidebar nav a svg {
+            width: 16px;
+            height: 16px;
+        }
+
+        .card div svg {
+            width: 18px;
+            height: 18px;
+            vertical-align: -3px;
+        }
+        .sidebar .user-info svg {
+            width: 14px;
+            height: 14px;
+            vertical-align: -2px;
+            margin-right: 4px;
+        }
+        .toast-container {
+            position: fixed;
+            top: 24px;
+            right: 24px;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .toast {
+            background: #1e1e1e;
+            border: 1px solid #333;
+            color: #fff;
+            padding: 12px 20px;
+            border-radius: 4px;
+            font-size: 14px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            animation: slideIn 0.3s ease;
+            max-width: 400px;
+        }
+        .icon-copy, .icon-expand {
+            width: 14px;
+            height: 14px;
+            vertical-align: middle;
+            opacity: 0.7;
+            transition: opacity 0.15s;
+        }
+        .icon-copy:hover, .icon-expand:hover {
+            opacity: 1;
+        }
+        .toast.error { border-left: 4px solid #ff5c5c; }
+        .toast.success { border-left: 4px solid #4caf50; }
+        .toast.warning { border-left: 4px solid #ff9800; }
+        .toast.info { border-left: 4px solid #2196f3; }
+        @keyframes slideIn { from{transform:translateX(100%);opacity:0} to{transform:translateX(0);opacity:1} }
+        @keyframes fadeOut { from{opacity:1} to{opacity:0;height:0;margin:0;padding:0} }
+        .toast.removing { animation: fadeOut 0.3s ease forwards; }
+
+        /* 自定义 Modal 遮罩 */
+        .modal-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 200;
+            animation: fadeIn 0.2s ease;
+        }
+        @keyframes fadeIn { from{opacity:0} to{opacity:1} }
+        .modal-box {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 4px;
+            padding: 24px;
+            min-width: 340px;
+            max-width: 420px;
+            width: 90%;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+        }
+        .modal-box h3 { margin: 0 0 12px; font-size: 18px; }
+        .modal-box p { font-size: 14px; color: #aaa; margin-bottom: 16px; }
+        .modal-box input { margin-bottom: 16px; }
+        .modal-buttons { display: flex; justify-content: flex-end; gap: 10px; }
+        .modal-buttons .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .destructive-confirm-text {
+            font-size: 13px;
+            color: #ff5c5c;
+            margin-bottom: 8px;
+        }
+        #rb-check-all, .rb-check-item {
+            width: 16px;
+            height: 16px;
+            cursor: pointer;
+        }
+        #rollback-console div {
+            padding: 2px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+        }
+        #rb-page-from, #rb-page-to {
+            width: 50px;
+            margin: 0 4px;
+        }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+        body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:#0a0a0a;color:#ffffff;display:flex;min-height:100vh}
+        a{text-decoration:none;color:inherit}
+        .sidebar{width:220px;background:#171717;display:flex;flex-direction:column;flex-shrink:0;position:fixed;top:0;left:0;bottom:0;z-index:100;padding:20px 0;border-right:1px solid #252525}
+        .sidebar .logo{padding:0 24px;margin-bottom:30px;font-weight:700;font-size:18px;color:#fff;display:flex;align-items:center;gap:8px}
+        .sidebar nav{flex:1}
+        .sidebar nav a{display:flex;align-items:center;gap:12px;padding:10px 24px;color:#aaa;font-size:14px;transition:all 0.15s;border-left:3px solid transparent}
+        .sidebar nav a:hover,.sidebar nav a.active{background:#252525;color:#fff;border-left-color:#fff}
+        .sidebar nav a svg{width:18px;height:18px}
+        .sidebar .user-info{border-top:1px solid #252525;padding:20px 24px 10px;font-size:13px;color:#888}
+        .main{margin-left:220px;flex:1;padding:32px 48px;overflow-y:auto}
+        .page-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}
+        .page-title{font-size:24px;font-weight:600;display:flex;align-items:center;gap:10px}
+        .btn{font-family:inherit;font-size:14px;padding:8px 20px;border-radius:4px;border:none;cursor:pointer;font-weight:500;display:inline-flex;align-items:center;gap:6px;transition:opacity 0.15s}
+        .btn:hover{opacity:0.9}
+        .btn-primary{background:#fff;color:#000}
+        .btn-secondary{background:#252525;color:#fff;border:1px solid #333}
+        .btn-danger{background:#3d0000;color:#ff5c5c;border:1px solid #5c0000}
+        .btn-sm{padding:4px 12px;font-size:13px}
+        .input-box{background:#0a0a0a;border:1px solid #333;color:#fff;padding:8px 12px;border-radius:4px;font-size:14px;font-family:inherit;width:100%;transition:border-color 0.15s}
+        .input-box:focus{outline:none;border-color:#555}
+        .card{background:#171717;border-radius:4px;padding:24px;border:1px solid #252525}
+        .flex-row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+        .grid-2{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+        .grid-4{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}@media(min-width:1200px){.grid-4{grid-template-columns:repeat(4,1fr)}}
+        table{width:100%;border-collapse:collapse;font-size:13px}
+        th,td{text-align:left;padding:10px 12px;border-bottom:1px solid #252525}
+        th{color:#aaa;font-weight:500;font-size:12px;text-transform:uppercase;letter-spacing:0.5px}
+        tr:hover td{background:rgba(255,255,255,0.02)}
+        .console-log{background:#0a0a0a;font-family:'Fira Code',monospace;font-size:12px;line-height:1.8;max-height:300px;overflow-y:auto;padding:16px;border-radius:4px;color:#ccc}
+        .console-log div{padding:2px 0;border-bottom:1px solid rgba(255,255,255,0.03)}
+        .badge{display:inline-block;padding:2px 8px;border-radius:3px;font-size:11px;font-weight:600;background:#252525;color:#aaa}
+        .badge.user{background:#1a3a2a;color:#4caf50}
+        .badge.admin{background:#3a2a1a;color:#ff9800}
+        .badge.superadmin{background:#3a1a2a;color:#e91e63}
+        .empty-state{text-align:center;padding:60px 20px;color:#555}
+        .modal{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:200}
+        .modal-content{background:#171717;padding:24px;border-radius:4px;min-width:320px;max-width:500px;width:90%}
+        .hidden{display:none!important}
+        .status-dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#4caf50;margin-right:6px}
+    </style>
+</head>
+<body>
+    <aside class="sidebar" id="sidebar"></aside>
+    <main class="main" id="app">
+        <div class="empty-state">加载中...</div>
+    </main>
+    <script>
+        (function() {
+            if (!document.querySelector('.toast-container')) {
+                const container = document.createElement('div');
+                container.className = 'toast-container';
+                document.body.appendChild(container);
+            }
+        })();
+
+        function showToast(message, type = 'info') {
+            const container = document.querySelector('.toast-container');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = message;
+            container.appendChild(toast);
+            setTimeout(() => {
+                toast.classList.add('removing');
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+
+        function showModal(options) {
+            return new Promise((resolve) => {
+                const {
+                    title = '',
+                    message = '',
+                    customContent = null,
+                    inputType = null,
+                    inputPlaceholder = '',
+                    inputExpected = null,
+                    confirmText = '确定',
+                    cancelText = '取消',
+                    danger = false,
+                    defaultValue = '',
+                    validate = null,
+                } = options;
+
+                const overlay = document.createElement('div');
+                overlay.className = 'modal-overlay';
+
+                const box = document.createElement('div');
+                box.className = 'modal-box';
+
+                let innerHtml = '';
+                if (title) innerHtml += `<h3>${title}</h3>`;
+                if (customContent) {
+                    innerHtml += customContent;
+                } else if (message) {
+                    innerHtml += `<p>${message}</p>`;
+                }
+
+                if (inputType === 'confirm' && inputExpected) {
+                    innerHtml += `<div class="destructive-confirm-text">请输入 <b>${inputExpected}</b> 以确认操作</div>`;
+                    innerHtml += `<input class="input-box" id="modal-input" placeholder="${inputExpected}" autocomplete="off">`;
+                } else if (inputType === 'prompt') {
+                    innerHtml += `<input class="input-box" id="modal-input" placeholder="${inputPlaceholder}" value="${defaultValue}" autocomplete="off">`;
+                }
+
+                innerHtml += `<div class="modal-buttons" style="justify-content:${cancelText === null ? 'center' : 'flex-end'}">`;
+                if (cancelText !== null) {
+                    innerHtml += `<button class="btn btn-secondary btn-sm" id="modal-cancel">${cancelText}</button>`;
+                }
+                innerHtml += `<button class="btn btn-sm ${danger ? 'btn-danger' : 'btn-primary'}" id="modal-confirm" ${(inputType === 'confirm') ? 'disabled' : ''}>${confirmText}</button>`;
+                innerHtml += `</div>`;
+
+                box.innerHTML = innerHtml;
+                overlay.appendChild(box);
+                document.body.appendChild(overlay);
+
+                const inputEl = document.getElementById('modal-input');
+                const confirmBtn = document.getElementById('modal-confirm');
+                const cancelBtn = document.getElementById('modal-cancel');
+
+                if (inputType === 'confirm' && inputEl && inputExpected) {
+                    inputEl.addEventListener('input', () => {
+                        confirmBtn.disabled = inputEl.value !== inputExpected;
+                    });
+                }
+
+                confirmBtn.addEventListener('click', () => {
+                    let result = true;
+                    if (inputEl && (inputType === 'confirm' || inputType === 'prompt')) {
+                        const val = inputEl.value.trim();
+                        if (validate && !validate(val)) return;
+                        result = val;
+                    }
+                    overlay.remove();
+                    resolve(result);
+                });
+
+                if (cancelBtn) {
+                    cancelBtn.addEventListener('click', () => {
+                        overlay.remove();
+                        resolve(null);
+                    });
+                }
+
+                overlay.addEventListener('click', (e) => {
+                    if (e.target === overlay) {
+                        overlay.remove();
+                        resolve(null);
+                    }
+                });
+
+                if (inputEl) setTimeout(() => inputEl.focus(), 100);
+            });
+        }
+        function escapeHtml(str) {
+            return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        function copyToClipboard(text) {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(() => showToast('已复制到剪贴板', 'success'));
+            } else {
+                const area = document.createElement('textarea');
+                area.value = text;
+                document.body.appendChild(area);
+                area.select();
+                document.execCommand('copy');
+                document.body.removeChild(area);
+                showToast('已复制到剪贴板', 'success');
+            }
+        }
+
+        function showExpandModal(title, content) {
+            showModal({
+                title: title,
+                customContent: `<pre style="background:#0a0a0a;padding:12px;border-radius:4px;max-height:60vh;overflow:auto;font-size:12px;white-space:pre-wrap;word-break:break-all">${escapeHtml(content)}</pre>`,
+                confirmText: '关闭',
+                cancelText: null
+            });
+        }
+        function renderTruncatedCell(fullText, maxLength = 40) {
+            if (!fullText) return '';
+            const escaped = escapeHtml(fullText);
+            if (fullText.length <= maxLength) return escaped;
+            const truncated = escapeHtml(fullText.substring(0, maxLength)) + '...';
+            const safeForAttr = (str) => str.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+            return `${truncated} 
+                <span style="cursor:pointer;margin-left:4px" title="复制" onclick="event.stopPropagation();copyToClipboard('${safeForAttr(fullText)}')">${icons.copy}</span>
+                <span style="cursor:pointer;margin-left:4px" title="展开" onclick="event.stopPropagation();showExpandModal('详细信息','${safeForAttr(fullText)}')">${icons.expand}</span>`;
+        }
+        const state = { user: null, page: 'login', config: {} };
+        const $app = document.getElementById('app');
+        const $sidebar = document.getElementById('sidebar');
+        let queryResults = [];        // 存储当前查询结果（全部）
+        let currentPage = 1;
+        const pageSize = 50;
+        let rollbackResults = [];       // 回档查询结果
+        let rollbackChecked = new Set(); // 选中要回档的 ID 集合
+        let rollbackPage = 1;           // 当前页码
+        const rollbackPageSize = 50;    // 每页条数
+
+        const icons = {
+            home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>',
+            search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
+            refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><polyline points="23 20 23 14 17 14"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg>',
+            user: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
+			users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+            settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+            key: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.78 7.78 5.5 5.5 0 0 1 7.78-7.78zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>',
+            zap: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
+            'bar-chart': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>',
+            'rewind': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/><polyline points="11 4 11 10 17 10"/></svg>',
+            'log': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>',
+            'clock': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+            copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-copy"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
+            expand: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-expand"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>'
+        };
+
+        async function api(url, options = {}) {
+            try {
+                const res = await fetch(url, {
+                    headers: { 'Content-Type': 'application/json' },
+                    ...options,
+                    body: options.body ? JSON.stringify(options.body) : undefined
+                });
+                if (res.status === 401) {
+                    state.user = null;
+                    renderLogin();
+                    throw new Error('未登录');
+                }
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || '请求失败');
+                return data;
+            } catch (e) {
+                if (e.message !== '未登录') showToast(e.message, 'error');
+                throw e;
+            }
+        }
+
+        function getQueryParam(name) {
+            const urlParams = new URLSearchParams(window.location.search);
+            return urlParams.get(name);
+        }
+
+        function navigate(page) {
+            state.page = page;
+            render();
+        }
+
+        function render() {
+            if (!state.user) {
+                const token = getQueryParam('token');
+                if (token) {
+                    renderTokenLogin(token);
+                    return;
+                }
+                renderLogin();
+            } else {
+                renderSidebar();
+                switch (state.page) {
+                    case 'home': renderHome(); break;
+                    case 'query': renderQuery(); break;
+                    case 'rollback': renderRollback(); break;
+                    case 'profile': renderProfile(); break;
+                    case 'config': renderConfig(); break;
+                    case 'users': renderUserManagement(); break;
+                    case 'tokens': renderTokenManagement(); break;
+                    default: renderHome();
+                }
+            }
+        }
+
+        function renderSidebar() {
+            const role = state.user.role;
+            let nav = `
+                <div class="logo">${icons.zap} BlockLog</div>
+                <nav>
+                    <a href="#" class="${state.page==='home'?'active':''}" onclick="navigate('home')">${icons['bar-chart']} 仪表盘</a>
+                    <a href="#" class="${state.page==='query'?'active':''}" onclick="navigate('query')">${icons.search} 查询</a>
+                    ${roleLevel(role) >= roleLevel('admin') ? `<a href="#" class="${state.page==='rollback'?'active':''}" onclick="navigate('rollback')">${icons.rewind} 回档</a>` : ''}
+                    <a href="#" class="${state.page==='profile'?'active':''}" onclick="navigate('profile')">${icons.user} 我的</a>
+                    ${role === 'superadmin' ? `<a href="#" class="${state.page==='config'?'active':''}" onclick="navigate('config')">${icons.settings} 配置</a>` : ''}
+                    ${role === 'superadmin' ? `<a href="#" class="${state.page==='users'?'active':''}" onclick="navigate('users')">${icons.users} 用户管理</a>` : ''}
+                    ${role === 'superadmin' ? `<a href="#" class="${state.page==='tokens'?'active':''}" onclick="navigate('tokens')">${icons.key} Token管理</a>` : ''}
+                </nav>
+                <div class="user-info">${icons.user} ${state.user.username} <span class="badge ${role}">${role}</span></div>
+            `;
+            $sidebar.innerHTML = nav;
+        }
+
+        function roleLevel(role) { return { user:0, admin:1, superadmin:2 }[role] || 0; }
+
+        function renderLogin() {
+            $app.innerHTML = `
+                <div style="display:flex;align-items:center;justify-content:center;min-height:100vh;flex-direction:column;gap:24px">
+                    <div style="font-size:36px">${icons.zap}</div>
+                    <h1 style="font-weight:600;font-size:24px">BlockLog 管理面板</h1>
+                    <div class="card" style="width:360px;max-width:90%;">
+                        <div style="font-weight:600;margin-bottom:16px">账号登录</div>
+                        <input class="input-box" id="login-username" placeholder="用户名" style="margin-bottom:12px">
+                        <input class="input-box" id="login-password" type="password" placeholder="密码" style="margin-bottom:16px">
+                        <button class="btn btn-primary" style="width:100%" onclick="doLogin()">登录</button>
+                        <div style="text-align:center;margin-top:16px;font-size:13px;color:#aaa">
+                            <a href="#" onclick="showTokenEntry()">使用 Token 登录</a>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function doLogin() {
+            const username = document.getElementById('login-username').value.trim();
+            const password = document.getElementById('login-password').value;
+            if (!username || !password) {
+                showToast('请输入用户名和密码', 'warning');
+                return;
+            }
+            try {
+                const res = await api('/api/login', { method: 'POST', body: { username, password } });
+                state.user = { username: res.username, role: res.role };
+                navigate('home');
+            } catch (e) {}
+        }
+
+        function showTokenEntry() {
+            $app.innerHTML = `
+                <div style="display:flex;align-items:center;justify-content:center;min-height:100vh;flex-direction:column;gap:24px">
+                    <div class="card" style="width:360px;max-width:90%;">
+                        <div style="font-weight:600;margin-bottom:16px">Token 验证</div>
+                        <input class="input-box" id="token-input" placeholder="请输入一次性Token" style="margin-bottom:16px">
+                        <button class="btn btn-primary" style="width:100%" onclick="checkToken()">验证</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function checkToken() {
+            const token = document.getElementById('token-input').value.trim();
+            if (!token) {
+                showToast('请输入Token', 'warning');
+                return;
+            }
+            try {
+                const res = await api('/api/login-token', { method: 'POST', body: { token } });
+                renderTokenRegister(token, res.role);
+            } catch (e) {}
+        }
+
+        function renderTokenLogin(token) {
+            $app.innerHTML = `
+                <div style="display:flex;align-items:center;justify-content:center;min-height:100vh;flex-direction:column;gap:24px">
+                    <div class="card" style="width:360px;max-width:90%;">
+                        <div style="font-weight:600;margin-bottom:16px">Token 注册</div>
+                        <p style="font-size:13px;color:#aaa;margin-bottom:12px">Token: ${token.substring(0,8)}...</p>
+                        <input class="input-box" id="reg-username" placeholder="设置用户名(至少3字符)" style="margin-bottom:12px">
+                        <input class="input-box" id="reg-password" type="password" placeholder="设置密码(至少6字符)" style="margin-bottom:16px">
+                        <button class="btn btn-primary" style="width:100%" onclick="registerWithToken('${token}')">注册并登录</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function registerWithToken(token) {
+            const username = document.getElementById('reg-username').value.trim();
+            const password = document.getElementById('reg-password').value;
+            if (!username || !password) {
+                showToast('请填写完整', 'warning');
+                return;
+            }
+            try {
+                const res = await api('/api/register', { method: 'POST', body: { token, username, password } });
+                state.user = { username: res.username, role: res.role };
+                navigate('home');
+            } catch (e) {}
+        }
+
+        function renderTokenRegister(token, role) {
+            $app.innerHTML = `
+                <div style="display:flex;align-items:center;justify-content:center;min-height:100vh;flex-direction:column;gap:24px">
+                    <div class="card" style="width:360px;max-width:90%;">
+                        <div style="font-weight:600;margin-bottom:16px">创建新账号</div>
+                        <p style="font-size:13px;color:#aaa;margin-bottom:12px">权限组: ${role}</p>
+                        <input class="input-box" id="reg-username" placeholder="用户名" style="margin-bottom:12px">
+                        <input class="input-box" id="reg-password" type="password" placeholder="密码" style="margin-bottom:16px">
+                        <button class="btn btn-primary" style="width:100%" onclick="registerWithToken('${token}')">创建并登录</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function renderHome() {
+            $app.innerHTML = `<div class="page-header"><div class="page-title">${icons['bar-chart']} 仪表盘</div></div>
+                <div class="grid-2" style="margin-bottom:24px">
+                    <div class="card" id="stats-card">加载中...</div>
+                    <div class="card" id="latest-card">加载中...</div>
+                </div>
+                <div class="card" style="margin-top:16px">
+                    <div style="font-weight:600;margin-bottom:12px">${icons.log} 实时操作日志</div>
+                    <div class="console-log" id="console-log"></div>
+                </div>`;
+            await Promise.all([loadStats(), loadLatestOps()]);
+        }
+
+        async function loadStats() {
+            try {
+                const res = await api('/api/stats');
+                document.getElementById('stats-card').innerHTML = `
+                    <div style="font-weight:600;margin-bottom:12px">服务器状态</div>
+                    <div style="font-size:28px;font-weight:700"><span class="status-dot"></span>${res.players} / ${res.maxPlayers}</div>
+                    <div style="color:#aaa;font-size:13px;margin-top:4px">在线玩家</div>
+                    <div style="margin-top:16px;font-size:20px;font-weight:700">${icons.clock} ${res.todayOperations}</div>
+                    <div style="color:#aaa;font-size:13px">今日操作记录</div>
+                `;
+            } catch (e) {}
+        }
+
+        async function loadLatestOps() {
+            try {
+                const res = await api('/api/operations/latest');
+                const container = document.getElementById('console-log');
+                container.innerHTML = res.map(op => {
+                    const typeMap = { place:'放置', destroy:'破坏', explode_block:'爆炸', container_change:'容器', inventory_change:'背包', pickup:'拾取', drop:'丢弃', server_start:'启动' };
+                    return `<div>${op.timestamp} ${typeMap[op.type]||op.type} 玩家:${op.player_name||'?'} 坐标:(${op.block_x},${op.block_y},${op.block_z})</div>`;
+                }).join('') || '<div>暂无记录</div>';
+                document.getElementById('latest-card').innerHTML = `<div style="font-weight:600;margin-bottom:12px">最近操作</div><div style="color:#aaa;font-size:13px">${res.length} 条记录</div>`;
+            } catch (e) {}
+        }
+
+        function renderQuery() {
+            queryResults = [];
+            currentPage = 1;
+            $app.innerHTML = `
+                <div class="page-header"><div class="page-title">${icons.search} 查询操作记录</div>
+                    <div id="export-btns" style="display:none">
+                        <button class="btn btn-sm btn-secondary" onclick="exportData('csv')">导出 CSV</button>
+                        <button class="btn btn-sm btn-secondary" onclick="exportData('txt')">导出 TXT</button>
+                        <button class="btn btn-sm btn-secondary" onclick="exportData('xlsx')">导出 Excel</button>
+                    </div>
+                </div>
+                <div class="card" style="margin-bottom:16px">
+                    <div class="flex-row" style="gap:8px;flex-wrap:wrap">
+                        <input class="input-box" style="width:80px" id="q-minX" placeholder="X起">
+                        <input class="input-box" style="width:80px" id="q-minY" placeholder="Y起">
+                        <input class="input-box" style="width:80px" id="q-minZ" placeholder="Z起">
+                        <span>~</span>
+                        <input class="input-box" style="width:80px" id="q-maxX" placeholder="X止">
+                        <input class="input-box" style="width:80px" id="q-maxY" placeholder="Y止">
+                        <input class="input-box" style="width:80px" id="q-maxZ" placeholder="Z止">
+                        <input class="input-box" style="width:60px" id="q-dimid" placeholder="维度" value="0">
+                        <input class="input-box" style="width:150px" id="q-timeFrom" placeholder="开始时间(可选)">
+                        <input class="input-box" style="width:150px" id="q-timeTo" placeholder="结束时间(可选)">
+                        <button class="btn btn-primary btn-sm" onclick="doQuery()">查询</button>
+                    </div>
+                </div>
+                <div id="query-results" class="card">
+                    <div class="empty-state">输入坐标后开始查询</div>
+                </div>
+                <div id="pagination" style="margin-top:16px;display:flex;justify-content:center;gap:8px"></div>
+            `;
+        }
+
+        async function doQuery() {
+            const params = {
+                minX: document.getElementById('q-minX').value || 0,
+                minY: document.getElementById('q-minY').value || 0,
+                minZ: document.getElementById('q-minZ').value || 0,
+                maxX: document.getElementById('q-maxX').value || 0,
+                maxY: document.getElementById('q-maxY').value || 0,
+                maxZ: document.getElementById('q-maxZ').value || 0,
+                dimid: document.getElementById('q-dimid').value || 0,
+                timeFrom: document.getElementById('q-timeFrom').value,
+                timeTo: document.getElementById('q-timeTo').value
+            };
+            const ops = await api('/api/operations?' + new URLSearchParams(params));
+            queryResults = ops || [];
+            currentPage = 1;
+
+            // 显示导出按钮
+            const exportDiv = document.getElementById('export-btns');
+            if (exportDiv) exportDiv.style.display = queryResults.length > 0 ? 'block' : 'none';
+
+            renderQueryResults();
+        }
+
+        function renderQueryResults() {
+            const total = queryResults.length;
+            const totalPages = Math.ceil(total / pageSize);
+            const start = (currentPage - 1) * pageSize;
+            const pageOps = queryResults.slice(start, start + pageSize);
+
+            const container = document.getElementById('query-results');
+            if (!container) return;
+
+            if (total === 0) {
+                container.innerHTML = '<div class="empty-state">没有找到记录</div>';
+                document.getElementById('pagination').innerHTML = '';
+                return;
+            }
+
+            container.innerHTML = `<table>
+                <thead><tr><th>时间</th><th>类型</th><th>玩家</th><th>坐标</th><th>详情</th></tr></thead>
+                <tbody>${pageOps.map(op => {
+                    const detail = op.old_data || op.new_data || '';
+                    return `<tr>
+                        <td>${op.timestamp}</td>
+                        <td>${op.type}</td>
+                        <td>${op.player_name || '?'}</td>
+                        <td>(${op.block_x},${op.block_y},${op.block_z})</td>
+                        <td style="font-size:12px;color:#aaa">${renderTruncatedCell(detail, 40)}</td>
+                    </tr>`;
+                }).join('')}</tbody>
+            </table>`;
+
+            // 分页控件
+            const paginationDiv = document.getElementById('pagination');
+            if (!paginationDiv) return;
+            paginationDiv.innerHTML = '';
+            if (totalPages <= 1) return;
+
+            const prevBtn = document.createElement('button');
+            prevBtn.className = 'btn btn-sm btn-secondary';
+            prevBtn.textContent = '上一页';
+            prevBtn.disabled = currentPage === 1;
+            prevBtn.onclick = () => { if (currentPage > 1) { currentPage--; renderQueryResults(); } };
+            paginationDiv.appendChild(prevBtn);
+
+            const pageInfo = document.createElement('span');
+            pageInfo.style.padding = '0 12px';
+            pageInfo.style.color = '#aaa';
+            pageInfo.textContent = `第 ${currentPage} / ${totalPages} 页`;
+            paginationDiv.appendChild(pageInfo);
+
+            const nextBtn = document.createElement('button');
+            nextBtn.className = 'btn btn-sm btn-secondary';
+            nextBtn.textContent = '下一页';
+            nextBtn.disabled = currentPage === totalPages;
+            nextBtn.onclick = () => { if (currentPage < totalPages) { currentPage++; renderQueryResults(); } };
+            paginationDiv.appendChild(nextBtn);
+
+            // 跳转到指定页
+            const jumpInput = document.createElement('input');
+            jumpInput.className = 'input-box';
+            jumpInput.style.width = '60px';
+            jumpInput.placeholder = '页码';
+            jumpInput.onkeypress = (e) => {
+                if (e.key === 'Enter') {
+                    const p = parseInt(jumpInput.value);
+                    if (!isNaN(p) && p >= 1 && p <= totalPages) {
+                        currentPage = p;
+                        renderQueryResults();
+                    }
+                }
+            };
+            paginationDiv.appendChild(jumpInput);
+            const jumpBtn = document.createElement('button');
+            jumpBtn.className = 'btn btn-sm btn-primary';
+            jumpBtn.textContent = '跳转';
+            jumpBtn.onclick = () => {
+                const p = parseInt(jumpInput.value);
+                if (!isNaN(p) && p >= 1 && p <= totalPages) {
+                    currentPage = p;
+                    renderQueryResults();
+                }
+            };
+            paginationDiv.appendChild(jumpBtn);
+        }
+
+        function exportData(format) {
+            const ops = queryResults;
+            if (ops.length === 0) return showToast('没有可导出的数据');
+
+            const headers = ['时间', '类型', '玩家', '坐标X', '坐标Y', '坐标Z', '旧数据', '新数据', '槽位'];
+            const rows = ops.map(op => [
+                op.timestamp, op.type, op.player_name || '',
+                op.block_x, op.block_y, op.block_z,
+                op.old_data || '', op.new_data || '', op.slot || ''
+            ]);
+
+            if (format === 'csv') {
+                const csvContent = [headers, ...rows].map(row => row.map(v => `"${(v+'').replace(/"/g, '""')}"`).join(',')).join('\n');
+                downloadFile(`blocklog_export_${new Date().toISOString().slice(0,10)}.csv`, csvContent, 'text/csv');
+            } else if (format === 'txt') {
+                const txtContent = [headers, ...rows].map(row => row.join('\t')).join('\n');
+                downloadFile(`blocklog_export_${new Date().toISOString().slice(0,10)}.txt`, txtContent, 'text/plain');
+            } else if (format === 'xlsx') {
+                // 生成 HTML table，Excel 会将其识别为表格
+                const tableHtml = `<table>${[headers].concat(rows).map(row => `<tr>${row.map(cell => `<td>${cell}</td>`).join('')}</tr>`).join('')}</table>`;
+                const fullHtml = `<html><head><meta charset="UTF-8"></head><body>${tableHtml}</body></html>`;
+                downloadFile(`blocklog_export_${new Date().toISOString().slice(0,10)}.xls`, fullHtml, 'application/vnd.ms-excel');
+            }
+        }
+
+        function downloadFile(filename, content, mimeType) {
+            const blob = new Blob(['\uFEFF' + content], { type: mimeType + ';charset=utf-8;' }); // BOM 解决中文乱码
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = filename;
+            link.click();
+            URL.revokeObjectURL(link.href);
+        }
+        function renderRollback() {
+            rollbackResults = [];
+            rollbackPage = 1;
+            rollbackChecked.clear();
+            $app.innerHTML = `
+                <div class="page-header"><div class="page-title">${icons.rewind} 回档</div></div>
+                <div class="card" style="margin-bottom:16px">
+                    <div class="flex-row" style="gap:8px;flex-wrap:wrap">
+                        <input class="input-box" style="width:80px" id="rb-minX" placeholder="X起">
+                        <input class="input-box" style="width:80px" id="rb-minY" placeholder="Y起">
+                        <input class="input-box" style="width:80px" id="rb-minZ" placeholder="Z起">
+                        <span>~</span>
+                        <input class="input-box" style="width:80px" id="rb-maxX" placeholder="X止">
+                        <input class="input-box" style="width:80px" id="rb-maxY" placeholder="Y止">
+                        <input class="input-box" style="width:80px" id="rb-maxZ" placeholder="Z止">
+                        <input class="input-box" style="width:60px" id="rb-dimid" placeholder="维度" value="0">
+                        <input class="input-box" style="width:170px" id="rb-timeFrom" placeholder="开始时间 YYYY-MM-DD HH:MM:SS" required>
+                        <button class="btn btn-primary btn-sm" onclick="doRollbackQuery()">查询可回档记录</button>
+                    </div>
+                    <div style="font-size:12px;color:#aaa;margin-top:6px">
+                        将列出从指定时间之后发生的所有操作，每页${rollbackPageSize}条。勾选需要回档的条目，然后点击下方按钮执行。
+                    </div>
+                </div>
+                <div id="rollback-results" class="card">
+                    <div class="empty-state">请先输入区域坐标和时间，然后点击查询</div>
+                </div>
+                <div id="rollback-pagination" style="margin-top:16px;display:flex;justify-content:center;gap:8px"></div>
+            `;
+        }
+        // 查询回档记录
+        async function doRollbackQuery() {
+            const minX = parseInt(document.getElementById('rb-minX').value) || 0;
+            const minY = parseInt(document.getElementById('rb-minY').value) || 0;
+            const minZ = parseInt(document.getElementById('rb-minZ').value) || 0;
+            const maxX = parseInt(document.getElementById('rb-maxX').value) || 0;
+            const maxY = parseInt(document.getElementById('rb-maxY').value) || 0;
+            const maxZ = parseInt(document.getElementById('rb-maxZ').value) || 0;
+            const dimid = parseInt(document.getElementById('rb-dimid').value) || 0;
+            const timeFrom = document.getElementById('rb-timeFrom').value.trim();
+
+            if (!timeFrom || !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(timeFrom)) {
+                showToast('时间格式错误，请使用 YYYY-MM-DD HH:MM:SS', 'error');
+                return;
+            }
+
+            const params = new URLSearchParams({
+                minX: Math.min(minX, maxX),
+                minY: Math.min(minY, maxY),
+                minZ: Math.min(minZ, maxZ),
+                maxX: Math.max(minX, maxX),
+                maxY: Math.max(minY, maxY),
+                maxZ: Math.max(minZ, maxZ),
+                dimid,
+                timeFrom,
+            });
+
+            try {
+                const ops = await api('/api/operations?' + params);
+                rollbackResults = ops;
+                rollbackPage = 1;
+                rollbackChecked.clear();
+                renderRollbackResults();
+            } catch (e) {}
+        }
+
+        // 渲染回档结果表格（带分页）
+        function renderRollbackResults() {
+            const container = document.getElementById('rollback-results');
+            const pagination = document.getElementById('rollback-pagination');
+            if (!container || !pagination) return;
+
+            const total = rollbackResults.length;
+            const totalPages = Math.ceil(total / rollbackPageSize);
+
+            if (total === 0) {
+                container.innerHTML = '<div class="empty-state">指定时间后无操作记录，无需回档</div>';
+                pagination.innerHTML = '';
+                return;
+            }
+
+            const start = (rollbackPage - 1) * rollbackPageSize;
+            const pageOps = rollbackResults.slice(start, start + rollbackPageSize);
+
+            // 构建表格
+            let html = `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-bottom:12px">
+                <button class="btn btn-sm btn-secondary" onclick="selectCurrentPage()">全选当前页</button>
+                <button class="btn btn-sm btn-secondary" onclick="selectAllPages()">全选所有页</button>
+                <button class="btn btn-sm btn-secondary" onclick="clearSelection()">清除选择</button>
+                <span style="color:#aaa;font-size:13px;margin-left:8px">共 ${total} 条，已选 <span id="rb-selected-count">0</span> 条</span>
+            </div>
+            <div style="margin-bottom:8px">
+                <span style="font-size:12px;color:#aaa">选择页码范围：</span>
+                <input class="input-box" style="width:50px;display:inline-block" id="rb-page-from" placeholder="起始页">
+                <span style="color:#aaa">至</span>
+                <input class="input-box" style="width:50px;display:inline-block" id="rb-page-to" placeholder="结束页">
+                <button class="btn btn-sm btn-secondary" onclick="selectPageRange()">确定</button>
+            </div>
+            <table>
+                <thead><tr><th>选择</th><th>时间</th><th>类型</th><th>玩家</th><th>坐标</th><th>详情</th></tr></thead>
+                <tbody>`;
+
+            pageOps.forEach(op => {
+                const detail = op.old_data || op.new_data || '';
+                html += `<tr>
+                    <td><input type="checkbox" class="rb-check-item" value="${op.id}" onchange="toggleCheckItem(this, ${op.id})" ${rollbackChecked.has(op.id) ? 'checked' : ''}></td>
+                    <td>${op.timestamp}</td>
+                    <td>${op.type}</td>
+                    <td>${op.player_name || '?'}</td>
+                    <td>(${op.block_x},${op.block_y},${op.block_z})</td>
+                    <td style="font-size:12px;color:#aaa">${renderTruncatedCell(detail, 40)}</td>
+                </tr>`;
+            });
+
+            html += `</tbody></table>
+                <div style="margin-top:16px;display:flex;justify-content:flex-end">
+                    <button class="btn btn-danger" onclick="executeRollback()">执行回档</button>
+                </div>`;
+
+            container.innerHTML = html;
+            updateRollbackSelectedCount();
+            renderRollbackPagination(totalPages);
+        }
+        
+        async function executeRollback() {
+            if (rollbackChecked.size === 0) {
+                showToast('请至少选择一条操作记录', 'warning');
+                return;
+            }
+            const ids = Array.from(rollbackChecked);
+            const confirmed = await showModal({
+                title: '危险操作',
+                message: `即将回档选中的 ${rollbackChecked.size} 条操作记录，此操作不可逆！`,
+                inputType: 'confirm',
+                inputExpected: 'ROLLBACK',
+                confirmText: '确认回档',
+                cancelText: '取消',
+                danger: true,
+            });
+            if (!confirmed) return;
+
+            // 显示控制台弹窗
+            const consoleContent = `<div id="rollback-console" style="background:#0a0a0a;font-family:monospace;font-size:12px;padding:12px;border-radius:4px;max-height:60vh;overflow-y:auto;color:#ccc">
+                <div>正在执行回档，请稍候...</div>
+            </div>`;
+            showModal({
+                title: '返回结果',
+                customContent: consoleContent,
+                confirmText: '关闭',
+                cancelText: null
+            });
+
+            // 发起回档请求
+            try {
+                const res = await api('/api/rollback', {
+                    method: 'POST',
+                    body: { operationIds: Array.from(rollbackChecked) }
+                });
+                updateRollbackConsole(res.results || []);
+            } catch (e) {
+                // 错误会在 api 函数中提示，这里更新控制台
+                const consoleDiv = document.getElementById('rollback-console');
+                if (consoleDiv) consoleDiv.innerHTML = '<div style="color:#ff5c5c">回档请求失败</div>';
+            }
+        }
+
+        // 更新控制台日志
+        function updateRollbackConsole(results) {
+            const consoleDiv = document.getElementById('rollback-console');
+            if (!consoleDiv) return;
+            const typeMap = { place:'放置', destroy:'破坏', explode_block:'爆炸破坏', container_change:'容器变动', inventory_change:'背包变动' };
+            let html = '';
+            results.forEach(r => {
+                const pos = r.blockPos || {};
+                const statusIcon = r.status === 'success' ? 'INFO' : 'ERR';
+                const statusText = r.status === 'success' ? '成功' : '失败';
+                html += `<div>${statusIcon} [${typeMap[r.type] || r.type}] 坐标(${pos.x},${pos.y},${pos.z}) ${statusText} ${r.error ? ' - ' + r.error : ''}</div>`;
+            });
+            html += `<div style="margin-top:8px;color:#4caf50">回档执行完毕，成功 ${results.filter(r => r.status === 'success').length} / ${results.length} 条</div>`;
+            consoleDiv.innerHTML = html;
+        }
+        // 分页控件
+        function renderRollbackPagination(totalPages) {
+            const paginationDiv = document.getElementById('rollback-pagination');
+            if (!paginationDiv) return;
+            paginationDiv.innerHTML = '';
+            if (totalPages <= 1) return;
+
+            const prevBtn = document.createElement('button');
+            prevBtn.className = 'btn btn-sm btn-secondary';
+            prevBtn.textContent = '上一页';
+            prevBtn.disabled = rollbackPage === 1;
+            prevBtn.onclick = () => { if (rollbackPage > 1) { rollbackPage--; renderRollbackResults(); } };
+            paginationDiv.appendChild(prevBtn);
+
+            const pageInfo = document.createElement('span');
+            pageInfo.style.padding = '0 12px';
+            pageInfo.style.color = '#aaa';
+            pageInfo.textContent = `第 ${rollbackPage} / ${totalPages} 页`;
+            paginationDiv.appendChild(pageInfo);
+
+            const nextBtn = document.createElement('button');
+            nextBtn.className = 'btn btn-sm btn-secondary';
+            nextBtn.textContent = '下一页';
+            nextBtn.disabled = rollbackPage === totalPages;
+            nextBtn.onclick = () => { if (rollbackPage < totalPages) { rollbackPage++; renderRollbackResults(); } };
+            paginationDiv.appendChild(nextBtn);
+
+            // 跳转输入
+            const jumpInput = document.createElement('input');
+            jumpInput.className = 'input-box';
+            jumpInput.style.width = '60px';
+            jumpInput.placeholder = '页码';
+            jumpInput.onkeypress = (e) => {
+                if (e.key === 'Enter') {
+                    const p = parseInt(jumpInput.value);
+                    if (!isNaN(p) && p >= 1 && p <= totalPages) {
+                        rollbackPage = p;
+                        renderRollbackResults();
+                    }
+                }
+            };
+            paginationDiv.appendChild(jumpInput);
+            const jumpBtn = document.createElement('button');
+            jumpBtn.className = 'btn btn-sm btn-primary';
+            jumpBtn.textContent = '跳转';
+            jumpBtn.onclick = () => {
+                const p = parseInt(jumpInput.value);
+                if (!isNaN(p) && p >= 1 && p <= totalPages) {
+                    rollbackPage = p;
+                    renderRollbackResults();
+                }
+            };
+            paginationDiv.appendChild(jumpBtn);
+        }
+
+        // 选择功能
+        function selectCurrentPage() {
+            const start = (rollbackPage - 1) * rollbackPageSize;
+            const pageOps = rollbackResults.slice(start, start + rollbackPageSize);
+            pageOps.forEach(op => rollbackChecked.add(op.id));
+            renderRollbackResults();
+        }
+        function selectAllPages() {
+            rollbackResults.forEach(op => rollbackChecked.add(op.id));
+            renderRollbackResults();
+        }
+        function clearSelection() {
+            rollbackChecked.clear();
+            renderRollbackResults();
+        }
+        function selectPageRange() {
+            const fromInput = document.getElementById('rb-page-from');
+            const toInput = document.getElementById('rb-page-to');
+            const from = parseInt(fromInput?.value);
+            const to = parseInt(toInput?.value);
+            const totalPages = Math.ceil(rollbackResults.length / rollbackPageSize);
+            if (isNaN(from) || isNaN(to) || from < 1 || to > totalPages || from > to) {
+                showToast('请输入有效的页码范围', 'error');
+                return;
+            }
+            for (let p = from; p <= to; p++) {
+                const start = (p - 1) * rollbackPageSize;
+                const end = Math.min(start + rollbackPageSize, rollbackResults.length);
+                for (let i = start; i < end; i++) {
+                    rollbackChecked.add(rollbackResults[i].id);
+                }
+            }
+            renderRollbackResults();
+        }
+
+        // 更新已选数量
+        function updateRollbackSelectedCount() {
+            const span = document.getElementById('rb-selected-count');
+            if (span) span.textContent = rollbackChecked.size;
+        }
+
+        // 单个复选框变化（保持之前已实现）
+        function toggleCheckItem(cb, id) {
+            if (cb.checked) rollbackChecked.add(id);
+            else rollbackChecked.delete(id);
+            updateRollbackSelectedCount();
+        }
+        function renderProfile() {
+            $app.innerHTML = `
+                <div class="page-header"><div class="page-title">${icons.user} 我的账户</div></div>
+                <div class="card" style="max-width:400px">
+                    <div style="margin-bottom:12px">用户名: ${state.user.username}</div>
+                    <div style="margin-bottom:16px">权限组: <span class="badge ${state.user.role}">${state.user.role}</span></div>
+                    <input class="input-box" type="password" id="old-password" placeholder="原密码" style="margin-bottom:12px">
+                    <input class="input-box" type="password" id="new-password" placeholder="新密码" style="margin-bottom:16px">
+                    <button class="btn btn-primary" onclick="changePassword()">修改密码</button>
+                    <button class="btn btn-secondary" style="margin-left:8px" onclick="logout()">登出</button>
+                </div>`;
+        }
+
+        async function changePassword() {
+            const oldPwd = document.getElementById('old-password').value;
+            const newPwd = document.getElementById('new-password').value;
+            if (!oldPwd || !newPwd) {
+                showToast('请填写原密码和新密码', 'warning');
+                return;
+            }
+            try {
+                await api('/api/change-password', { method: 'POST', body: { oldPassword: oldPwd, newPassword: newPwd } });
+                showToast('密码修改成功', 'success');
+                navigate('profile');
+            } catch (e) {}
+        }
+
+        async function logout() {
+            await api('/api/logout', { method: 'POST' });
+            state.user = null;
+            navigate('login');
+        }
+
+        function renderConfig() {
+            $app.innerHTML = `
+                <div class="page-header"><div class="page-title">${icons.settings} 配置管理</div></div>
+                <div class="card" style="max-width:500px" id="config-form-card">
+                    <div class="empty-state">加载中...</div>
+                </div>`;
+            loadConfig();
+        }
+
+        async function loadConfig() {
+            try {
+                const config = await api('/api/config');
+                state.config = config;  // 同步到全局状态
+                const card = document.getElementById('config-form-card');
+                card.innerHTML = `
+                    <div style="margin-bottom:20px">
+                        <label style="display:block;font-weight:600;margin-bottom:6px">Web 面板端口</label>
+                        <input class="input-box" id="cfg-webPort" type="number" value="${config.webPort}" placeholder="3000">
+                        <div style="font-size:12px;color:#aaa;margin-top:2px">修改后需重启插件生效</div>
+                    </div>
+                    <div style="margin-bottom:20px">
+                        <label style="display:block;font-weight:600;margin-bottom:6px">是否记录方块操作</label>
+                        <select class="input-box" id="cfg-allowRecord">
+                            <option value="true" ${config.allowRecord ? 'selected' : ''}>开启</option>
+                            <option value="false" ${!config.allowRecord ? 'selected' : ''}>关闭</option>
+                        </select>
+                    </div>
+                    <div style="margin-bottom:20px">
+                        <label style="display:block;font-weight:600;margin-bottom:6px">日志显示最大条数</label>
+                        <input class="input-box" id="cfg-maxLogLines" type="number" value="${config.maxLogLines}" placeholder="500">
+                    </div>
+                    <div class="flex-row" style="justify-content:flex-end">
+                        <button class="btn btn-primary" onclick="saveConfig()">保存配置</button>
+                    </div>
+                `;
+            } catch (e) {
+                // 错误已在 api 中处理
+            }
+        }
+
+        async function saveConfig() {
+            const webPort = parseInt(document.getElementById('cfg-webPort').value) || 3000;
+            const allowRecord = document.getElementById('cfg-allowRecord').value === 'true';
+            const maxLogLines = parseInt(document.getElementById('cfg-maxLogLines').value) || 500;
+            try {
+                await api('/api/config', { method: 'POST', body: { webPort, allowRecord, maxLogLines } });
+                showToast('配置已保存', 'success');
+                state.config = { ...state.config, webPort, allowRecord, maxLogLines };
+            } catch (e) {}
+        }
+        function renderUserManagement() {
+            $app.innerHTML = `<div class="page-header"><div class="page-title">${icons.users} 用户管理</div></div><div id="user-list" class="card"></div>`;
+            loadUsers();
+        }
+        function renderTokenManagement() {
+            $app.innerHTML = `<div class="page-header"><div class="page-title">${icons.key} Token管理</div></div>
+                <div class="card" style="margin-bottom:16px"><button class="btn btn-primary" onclick="generateNewToken()">生成新Token</button></div>
+                <div id="token-list" class="card"></div>`;
+            loadTokens();
+        }
+        function renderUserManagement() {
+    $app.innerHTML = `
+        <div class="page-header"><div class="page-title">${icons.users} 用户管理</div></div>
+        <div class="card" style="margin-bottom:16px">
+            <table>
+                <thead><tr><th>用户名</th><th>权限组</th><th>创建时间</th><th>操作</th></tr></thead>
+                <tbody id="user-table-body">
+                    <tr><td colspan="4" class="empty-state">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>`;
+    loadUsers();
+}
+
+        async function loadUsers() {
+            try {
+                const users = await api('/api/users');
+                const tbody = document.getElementById('user-table-body');
+                if (!users || users.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="4" class="empty-state">暂无用户</td></tr>';
+                    return;
+                }
+                const currentUser = state.user.username;
+                tbody.innerHTML = users.map(u => `
+                    <tr>
+                        <td>${u.username}</td>
+                        <td><span class="badge ${u.role}">${u.role}</span></td>
+                        <td>${u.created_at || ''}</td>
+                        <td>
+                            ${(u.username !== currentUser && u.role !== 'superadmin')
+                                ? `<button class="btn btn-danger btn-sm" onclick="deleteUser('${u.username}')">删除</button>`
+                                : '<span style="color:#555">—</span>'}
+                        </td>
+                    </tr>
+                `).join('');
+            } catch (e) {
+                // 错误已在 api 函数中处理
+            }
+        }
+
+        async function deleteUser(username) {
+            const confirmed = await showModal({
+                title: '确认删除',
+                message: `确定要删除用户 "${username}" 吗？此操作不可恢复。`,
+                inputType: 'confirm',
+                inputExpected: 'DELETE',
+                confirmText: '删除',
+                cancelText: '取消',
+                danger: true,
+            });
+            if (!confirmed) return;
+            try {
+                await api(`/api/users/${username}`, { method: 'DELETE' });
+                showToast('用户已删除', 'success');
+                loadUsers();
+            } catch (e) {}
+        }
+        function renderTokenManagement() {
+            $app.innerHTML = `
+                <div class="page-header"><div class="page-title">${icons.key} Token管理</div></div>
+                <div class="card" style="margin-bottom:16px">
+                    <div class="flex-row" style="justify-content:space-between;align-items:center">
+                        <span>所有一次性邀请 Token</span>
+                        <button class="btn btn-primary btn-sm" onclick="generateNewToken()">生成新Token</button>
+                    </div>
+                </div>
+                <div class="card">
+                    <table>
+                        <thead><tr><th>Token</th><th>权限组</th><th>状态</th><th>创建者</th><th>创建时间</th><th>操作</th></tr></thead>
+                        <tbody id="token-table-body">
+                            <tr><td colspan="6" class="empty-state">加载中...</td></tr>
+                        </tbody>
+                    </table>
+                </div>`;
+            loadTokens();
+        }
+
+        async function loadTokens() {
+            try {
+                const tokens = await api('/api/tokens');
+                const tbody = document.getElementById('token-table-body');
+                if (!tokens || tokens.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="6" class="empty-state">暂无Token</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = tokens.map(t => `
+                    <tr>
+                        <td style="font-family:monospace;font-size:13px">${renderTruncatedCell(t.token, 12)}</td>
+                        <td><span class="badge ${t.role}">${t.role}</span></td>
+                        <td>${t.used ? '<span style="color:#999">已使用</span>' : '<span style="color:#4caf50">可用</span>'}</td>
+                        <td>${t.created_by || '-'}</td>
+                        <td>${t.created_at}</td>
+                        <td>
+                            <button class="btn btn-danger btn-sm" onclick="deleteToken('${t.token}')">删除</button>
+                        </td>
+                    </tr>
+                `).join('');
+            } catch (e) {}
+        }
+
+        async function deleteToken(token) {
+            const confirmed = await showModal({
+                title: '删除 Token',
+                message: '确定要删除此 Token 吗？使用此 Token 将立即失效。',
+                inputType: 'confirm',
+                inputExpected: 'DELETE',
+                confirmText: '删除',
+                cancelText: '取消',
+                danger: true,
+            });
+            if (!confirmed) return;
+            try {
+                await api(`/api/tokens/${token}`, { method: 'DELETE' });
+                showToast('Token 已删除', 'success');
+                loadTokens();
+            } catch (e) {}
+        }
+
+        async function generateNewToken() {
+            const role = await showModal({
+                title: '生成 Token',
+                message: '请指定 Token 权限组（superadmin / admin / user）：',
+                inputType: 'prompt',
+                inputPlaceholder: '请输入权限组',
+                confirmText: '生成',
+                cancelText: '取消',
+                validate: (val) => {
+                    if (!['superadmin', 'admin', 'user'].includes(val)) {
+                        showToast('无效权限组，必须是 superadmin、admin 或 user', 'error');
+                        return false;
+                    }
+                    return true;
+                }
+            });
+            if (!role) return;
+            try {
+                const res = await api('/api/tokens', { method: 'POST', body: { role } });
+                showToast(`新 Token 已生成：${res.token}`, 'success');
+                loadTokens();
+            } catch (e) {}
+        }
+        // 初始化
+        (async function init() {
+            try {
+                const me = await api('/api/me');
+                state.user = me;
+                navigate('home');
+            } catch (e) {
+                renderLogin();
+            }
+        })();
+    </script>
+</body>
+</html>
