@@ -15,7 +15,7 @@ BlockLog 是一款基于 [Levilamina](https://github.com/LiteLDev/Levilamina) �
 
 ## 安装要求
 
-- Levilamina 2.9.0 或更高版本
+- Levilamina 1.0.0 或更高版本
 - Node.js 环境（随 Levilamina 内置，无需额外安装）
 - 依赖项（通过 `lip` 或手动安装）：
   - express
