@@ -1,0 +1,6 @@
+{
+  "webPort": 3000,
+  "allowRecord": true,
+  "maxLogLines": 1000,
+  "sessionSecret": "change_me_to_random_string"
+}
