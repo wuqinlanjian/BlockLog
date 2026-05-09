@@ -15,7 +15,7 @@ BlockLog is a plugin for Minecraft Bedrock Dedicated Server (BDS) based on [Levi
 
 ## Requirements
 
-- Levilamina 2.9.0 or above
+- Levilamina 1.0.0 or above
 - Built‑in Node.js environment (comes with Levilamina)
 - npm packages (install via `lip` or manually):
   - express
