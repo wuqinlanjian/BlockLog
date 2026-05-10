@@ -1,5 +1,5 @@
 // modules/command.js
-const { queryOperations, queryOperationsByTime, insertOperation, getSession, closeDatabase, createInitialSuperToken } = require("./database");
+const { queryOperations, queryOperationsByTime, insertOperation, getSession, closeDatabase, createInitialSuperToken, getContainerSnapshot } = require("./database");
 
 let globalConfig = {};
 let isConsumerActive = true;
@@ -266,8 +266,9 @@ function formatRecord(op, showCoord = true) {
             if (extraStr) {
                 try {
                     const extra = JSON.parse(extraStr);
-                    if (extra.type) {
-                        desc += ` §8(§6${shortBlockName(extra.type)}§8)`;
+                    const containerName = extra.name || extra.type;
+                    if (containerName) {
+                        desc += ` §8(§6${shortBlockName(containerName)}§8)`;
                     }
                 } catch(e) {}
             }
@@ -337,54 +338,66 @@ function performRollback(player, ops, isRestore = false) {
                             success++;
                         }
                         break;
-                        case "destroy":
-                        case "explode_block":
-                            if (oldData) {
-                                const info = JSON.parse(oldData);
-                                mc.setBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid, info.type, info.tileData || 0);
-                                const block = mc.getBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid);
-                                if (block) {
-                                    if (info.nbt) { const nbt = NBT.parseSNBT(info.nbt); if (nbt) block.setNbt(nbt); }
-                                    if (info.beNbt && block.hasBlockEntity()) {
-                                        const be = block.getBlockEntity();
-                                        if (be) { const beNbt = NBT.parseSNBT(info.beNbt); if (beNbt) be.setNbt(beNbt); }
-                                    }
-                        
-                                    if (block.hasContainer()) {
-                                        const snapshot = getContainerSnapshot(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid, op[15]); // timestamp
-                                        const container = block.getContainer();
-                                        if (container) {
-                                            container.removeAllItems();
-                                            for (const [slot, data] of Object.entries(snapshot)) {
-                                                if (data) {
-                                                    try {
-                                                        const itemInfo = JSON.parse(data);
-                                                        const item = mc.newItem(itemInfo.type, itemInfo.count);
-                                                        item.setAux(itemInfo.aux || 0);
-                                                        item.setDamage(itemInfo.damage || 0);
-                                                        if (itemInfo.nbt) {
-                                                            const nbt = NBT.parseSNBT(itemInfo.nbt);
-                                                            if (nbt) item.setNbt(nbt);
-                                                        }
-                                                        container.setItem(parseInt(slot), item);
-                                                    } catch(e) {}
+                        case "container_change":
+                        case "inventory_change": {
+                            let container = null;
+                            if (type === "container_change") {
+                                // 先尝试获取方块容器
+                                let block = mc.getBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid);
+                                if (block && block.hasContainer()) {
+                                    container = block.getContainer();
+                                } else {
+                                    // 如果当前没有容器方块，则根据记录中的 extra 信息恢复方块
+                                    const extra = op[16];
+                                    if (extra) {
+                                        try {
+                                            const blockInfo = JSON.parse(extra);
+                                            if (blockInfo.type) {
+                                                mc.setBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid, blockInfo.type, blockInfo.tileData || 0);
+                                                // 恢复方块NBT（如有）
+                                                if (blockInfo.nbt) {
+                                                    block = mc.getBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid);
+                                                    if (block && blockInfo.nbt) {
+                                                        const nbt = NBT.parseSNBT(blockInfo.nbt);
+                                                        if (nbt) block.setNbt(nbt);
+                                                    }
+                                                }
+                                                // 重新获取容器
+                                                block = mc.getBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid);
+                                                if (block && block.hasContainer()) {
+                                                    container = block.getContainer();
                                                 }
                                             }
-                                        }
+                                        } catch(e) {}
                                     }
                                 }
-                                if (type === "explode_block") {
-                                    const firePositions = [
-                                        [blockPos.x,     blockPos.y + 1, blockPos.z    ],
-                                        [blockPos.x + 1, blockPos.y,     blockPos.z    ],
-                                        [blockPos.x - 1, blockPos.y,     blockPos.z    ],
-                                        [blockPos.x,     blockPos.y,     blockPos.z + 1],
-                                        [blockPos.x,     blockPos.y,     blockPos.z - 1]
-                                    ];
+                            } else {
+                                // inventory_change 的处理保持不变
+                                if (player && blockPos.x === player.blockPos.x && blockPos.y === player.blockPos.y && blockPos.z === player.blockPos.z) {
+                                    container = player.getInventory();
+                                }
+                            }
+
+                            if (container && slot !== null) {
+                                if (oldData) {
+                                    const info = JSON.parse(oldData);
+                                    const item = mc.newItem(info.type, info.count);
+                                    item.setAux(info.aux || 0);
+                                    item.setDamage(info.damage || 0);
+                                    if (info.nbt) {
+                                        const nbt = NBT.parseSNBT(info.nbt);
+                                        if (nbt) item.setNbt(nbt);
+                                    }
+                                    container.setItem(slot, item);
+                                } else {
+                                    container.setItem(slot, mc.newItem("minecraft:air", 0));
                                 }
                                 success++;
+                            } else {
+                                logger.warn(`容器回档失败：无法获取容器 slot=${slot} pos=${blockPos.x},${blockPos.y},${blockPos.z}`);
                             }
                             break;
+                        }
                     case "container_change":
                     case "inventory_change": {
                         const block = mc.getBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid);
@@ -413,54 +426,70 @@ function performRollback(player, ops, isRestore = false) {
                         mc.setBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid, "minecraft:air", 0);
                         success++;
                         break;
-                    case "destroy":
-                    case "explode_block":
-                        if (oldData) {
-                            const info = JSON.parse(oldData);
-                            mc.setBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid, info.type, info.tileData || 0);
-                            const block = mc.getBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid);
-                            if (block) {
-                                if (info.nbt) { const nbt = NBT.parseSNBT(info.nbt); if (nbt) block.setNbt(nbt); }
-                                if (info.beNbt && block.hasBlockEntity()) {
-                                    const be = block.getBlockEntity();
-                                    if (be) { const beNbt = NBT.parseSNBT(info.beNbt); if (beNbt) be.setNbt(beNbt); }
-                                }
-                    
-                                if (block.hasContainer()) {
-                                    const snapshot = getContainerSnapshot(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid, op[15]); // timestamp
-                                    const container = block.getContainer();
-                                    if (container) {
-                                        container.removeAllItems();
-                                        for (const [slot, data] of Object.entries(snapshot)) {
-                                            if (data) {
-                                                try {
-                                                    const itemInfo = JSON.parse(data);
-                                                    const item = mc.newItem(itemInfo.type, itemInfo.count);
-                                                    item.setAux(itemInfo.aux || 0);
-                                                    item.setDamage(itemInfo.damage || 0);
-                                                    if (itemInfo.nbt) {
-                                                        const nbt = NBT.parseSNBT(itemInfo.nbt);
-                                                        if (nbt) item.setNbt(nbt);
-                                                    }
-                                                    container.setItem(parseInt(slot), item);
-                                                } catch(e) {}
+                        case "destroy":
+                            case "explode_block":
+                                if (oldData) {
+                                    const info = JSON.parse(oldData);
+                                    // 先设置方块类型和 tileData
+                                    mc.setBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid, info.type, info.tileData || 0);
+                                    let block = mc.getBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid);
+                            
+                                    // 强力恢复方块NBT（包括朝向等），如果 nbt 字段有效
+                                    if (info.nbt && block) {
+                                        const nbt = NBT.parseSNBT(info.nbt);
+                                        if (nbt) {
+                                            block.setNbt(nbt);
+                                            // 重新获取 block 对象以确保后续操作基于最新数据
+                                            block = mc.getBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid);
+                                        }
+                                    }
+                            
+                                    // 恢复方块实体NBT（如果方块有方块实体）
+                                    if (info.beNbt && block && block.hasBlockEntity()) {
+                                        const be = block.getBlockEntity();
+                                        if (be) {
+                                            const beNbt = NBT.parseSNBT(info.beNbt);
+                                            if (beNbt) be.setNbt(beNbt);
+                                        }
+                                    }
+                            
+                                    // 恢复容器内容（原有代码保持不变）
+                                    if (block && block.hasContainer()) {
+                                        const snapshot = getContainerSnapshot(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid, op[15]);
+                                        const container = block.getContainer();
+                                        if (container) {
+                                            container.removeAllItems();
+                                            for (const [slot, data] of Object.entries(snapshot)) {
+                                                if (data) {
+                                                    try {
+                                                        const itemInfo = JSON.parse(data);
+                                                        const item = mc.newItem(itemInfo.type, itemInfo.count);
+                                                        item.setAux(itemInfo.aux || 0);
+                                                        item.setDamage(itemInfo.damage || 0);
+                                                        if (itemInfo.nbt) {
+                                                            const nbt = NBT.parseSNBT(itemInfo.nbt);
+                                                            if (nbt) item.setNbt(nbt);
+                                                        }
+                                                        container.setItem(parseInt(slot), item);
+                                                    } catch(e) {}
+                                                }
                                             }
                                         }
                                     }
+                            
+                                    // 原有的爆炸火焰清理（保持不变）
+                                    if (type === "explode_block") {
+                                        const firePositions = [
+                                            [blockPos.x,     blockPos.y + 1, blockPos.z    ],
+                                            [blockPos.x + 1, blockPos.y,     blockPos.z    ],
+                                            [blockPos.x - 1, blockPos.y,     blockPos.z    ],
+                                            [blockPos.x,     blockPos.y,     blockPos.z + 1],
+                                            [blockPos.x,     blockPos.y,     blockPos.z - 1]
+                                        ];
+                                    }
+                                    success++;
                                 }
-                            }
-                            if (type === "explode_block") {
-                                const firePositions = [
-                                    [blockPos.x,     blockPos.y + 1, blockPos.z    ],
-                                    [blockPos.x + 1, blockPos.y,     blockPos.z    ],
-                                    [blockPos.x - 1, blockPos.y,     blockPos.z    ],
-                                    [blockPos.x,     blockPos.y,     blockPos.z + 1],
-                                    [blockPos.x,     blockPos.y,     blockPos.z - 1]
-                                ];
-                            }
-                            success++;
-                        }
-                        break;
+                                break;
                         case "container_change":
                         case "inventory_change": {
                             let container = null;
@@ -666,14 +695,29 @@ function registerCommand() {
                     const rows = db.query("SELECT COUNT(*) AS cnt FROM operations");
                     if (rows && rows.length > 1) totalRecords = rows[1][0];
                 }
+            
+                // 获取数据库文件大小
+                let dbSizeStr = "未知";
+                const dbPath = "plugins/BlockLog/blocklog.db";
+                if (File.exists(dbPath)) {
+                    const bytes = File.getFileSize(dbPath);
+                    if (bytes >= 0) {
+                        if (bytes < 1024) dbSizeStr = `${bytes} B`;
+                        else if (bytes < 1048576) dbSizeStr = `${(bytes / 1024).toFixed(1)} KB`;
+                        else dbSizeStr = `${(bytes / 1048576).toFixed(1)} MB`;
+                    }
+                }
+            
                 const msg = [
                     `§3BlockLog 状态`,
                     `§b版本: §f${globalConfig.version || "1.0.0"}`,
                     `§b数据库: §f${db ? "已连接" : "未连接"}`,
+                    `§b数据库大小: §f${dbSizeStr}`,  // 新增行
                     `§b记录总数: §f${totalRecords}`,
                     `§b事件记录: §f${isConsumerActive ? "开启" : "暂停"}`,
                     `§b在线玩家: §f${mc.getOnlinePlayers().length}`
                 ];
+            
                 if (player) {
                     msg.forEach(line => player.tell(line));
                 } else {
@@ -742,5 +786,6 @@ module.exports = {
     inspectPlayers, 
     setConfig: (cfg) => { globalConfig = cfg; },
     setConsumer: (val) => { isConsumerActive = val; },
-    getConsumer: () => isConsumerActive
+    getConsumer: () => isConsumerActive,
+    formatRecord,
 };
