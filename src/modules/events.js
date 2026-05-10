@@ -1,9 +1,9 @@
 // modules/events.js
 const { insertOperation } = require("./database");
-const { getConsumer, inspectPlayers } = require("./command"); 
+const { getConsumer, inspectPlayers, formatRecord } = require("./command"); 
 const { queryOperations } = require("./database");    
 
-
+let _inspectClickCount = {};
 const actionMap = {
     place: { desc: "放置方块" },
     destroy: { desc: "破坏方块" },
@@ -101,8 +101,10 @@ function registerEvents() {
             const cb = mc.getBlock(container.pos.x, container.pos.y, container.pos.z, container.pos.dimid);
             if (cb) {
                 blockInfo = {
+                    name: cb.name, 
                     type: cb.type,
                     tileData: cb.tileData
+
                 };
             }
         }
@@ -219,6 +221,20 @@ function registerEvents() {
             time: system.getTimeStr()
         });
     });
+
+    mc.listen("onUseItemOn", (player, item, block, side, pos) => {
+        if (!inspectPlayers.has(player.xuid)) return;
+        if (block.hasContainer()){
+            showInspectInfo(player, block.pos);
+            return;
+        }
+    
+        _inspectClickCount[player.xuid] = (_inspectClickCount[player.xuid] || 0) + 1;
+        if (_inspectClickCount[player.xuid] >= 10) {
+            _inspectClickCount[player.xuid] = 0;
+            showInspectInfo(player, block.pos);
+        }
+    });
 }
 
 function showInspectInfo(player, pos) {
@@ -230,17 +246,10 @@ function showInspectInfo(player, pos) {
     if (ops.length > 0) {
         player.tell(`§e----- 监察 (${pos.x},${pos.y},${pos.z}) -----`);
         ops.forEach(op => {
-            const relTime = relativeTime(op[15]);
-            let line = `  §7${relTime}: §f${op[3]} §e${actionMap[op[1]] ? actionMap[op[1]].desc : op[1]}`;
-            const data = (op[1] === "place" ? op[13] : op[12]) || op[13] || op[12];
-            if (data) {
-                try {
-                    const d = JSON.parse(data);
-                    if (d.name) line += ` §8[§6${d.name}§8]`;
-                } catch(e) {}
-            }
-            player.tell(line);
+            player.tell(formatRecord(op, true));
         });
+    } else {
+        player.tell(`§7[监察] (${pos.x},${pos.y},${pos.z}) 暂无操作记录`);
     }
 }
 
