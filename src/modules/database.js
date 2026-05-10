@@ -10,6 +10,7 @@ function initDatabase() {
         return;
     }
     try {
+        // 操作记录表
         session.exec(`
             CREATE TABLE IF NOT EXISTS operations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,6 +32,7 @@ function initDatabase() {
                 extra TEXT
             );
         `);
+        // 用户表
         session.exec(`
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,6 +42,7 @@ function initDatabase() {
                 created_at TEXT NOT NULL
             );
         `);
+        // Token表
         session.exec(`
             CREATE TABLE IF NOT EXISTS tokens (
                 token TEXT PRIMARY KEY,
@@ -49,8 +52,10 @@ function initDatabase() {
                 created_at TEXT NOT NULL
             );
         `);
+        // Sessions表
+        session.exec("DROP TABLE IF EXISTS sessions");
         session.exec(`
-            CREATE TABLE IF NOT EXISTS sessions (
+            CREATE TABLE sessions (
                 sid TEXT PRIMARY KEY,
                 sess TEXT NOT NULL,
                 expired TEXT NOT NULL
@@ -64,7 +69,13 @@ function initDatabase() {
     }
 }
 
+// 安全转义字符串（单引号替换为两个单引号）
+function esc(str) {
+    if (typeof str !== "string") return str;
+    return str.replace(/'/g, "''");
+}
 
+// 插入操作记录
 function insertOperation(data) {
     if (!session) {
         logger.warn("BlockLog: 数据库未初始化，无法记录操作");
@@ -75,45 +86,42 @@ function insertOperation(data) {
             (operation_type, player_xuid, player_name, player_pos_x, player_pos_y, player_pos_z, player_dimid,
              block_pos_x, block_pos_y, block_pos_z, block_dimid,
              old_data, new_data, container_slot, timestamp, extra)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-        session.exec(sql, [
-            data.type,
-            data.xuid || "",
-            data.name || "",
-            data.playerPos?.x ?? null,
-            data.playerPos?.y ?? null,
-            data.playerPos?.z ?? null,
-            data.playerPos?.dimid ?? null,
-            data.blockPos?.x ?? null,
-            data.blockPos?.y ?? null,
-            data.blockPos?.z ?? null,
-            data.blockPos?.dimid ?? null,
-            data.oldData || "",
-            data.newData || "",
-            data.slot ?? null,
-            data.time || system.getTimeStr(),
-            data.extra || ""
-        ]);
+            VALUES (
+                '${esc(data.type)}',
+                '${esc(data.xuid || "")}',
+                '${esc(data.name || "")}',
+                ${data.playerPos?.x ?? null},
+                ${data.playerPos?.y ?? null},
+                ${data.playerPos?.z ?? null},
+                ${data.playerPos?.dimid ?? null},
+                ${data.blockPos?.x ?? null},
+                ${data.blockPos?.y ?? null},
+                ${data.blockPos?.z ?? null},
+                ${data.blockPos?.dimid ?? null},
+                '${esc(data.oldData || "")}',
+                '${esc(data.newData || "")}',
+                ${data.slot ?? null},
+                '${esc(data.time || system.getTimeStr())}',
+                '${esc(data.extra || "")}'
+            )`;
+        session.exec(sql);
     } catch (e) {
         logger.error("插入操作失败: " + e);
     }
 }
 
+// 查询操作记录（不带时间筛选）
 function queryOperations(minX, minY, minZ, maxX, maxY, maxZ, dimid, limit = null) {
     if (!session) return [];
     try {
         let sql = `SELECT * FROM operations
-            WHERE block_dimid = ?
-              AND block_pos_x BETWEEN ? AND ?
-              AND block_pos_y BETWEEN ? AND ?
-              AND block_pos_z BETWEEN ? AND ?
+            WHERE block_dimid = ${dimid}
+              AND block_pos_x BETWEEN ${minX} AND ${maxX}
+              AND block_pos_y BETWEEN ${minY} AND ${maxY}
+              AND block_pos_z BETWEEN ${minZ} AND ${maxZ}
             ORDER BY id DESC`;
-        const params = [dimid, minX, maxX, minY, maxY, minZ, maxZ];
-        if (limit) {
-            sql += " LIMIT ?";
-            params.push(limit);
-        }
-        const result = session.query(sql, params);
+        if (limit) sql += ` LIMIT ${limit}`;
+        const result = session.query(sql);
         if (!result || result.length <= 1) return [];
         return result.slice(1);
     } catch (e) {
@@ -122,26 +130,20 @@ function queryOperations(minX, minY, minZ, maxX, maxY, maxZ, dimid, limit = null
     }
 }
 
+// 按时间查询操作记录
 function queryOperationsByTime(minX, minY, minZ, maxX, maxY, maxZ, dimid, timeFrom, timeTo = null, limit = null) {
     if (!session) return [];
     try {
         let sql = `SELECT * FROM operations
-            WHERE block_dimid = ?
-              AND block_pos_x BETWEEN ? AND ?
-              AND block_pos_y BETWEEN ? AND ?
-              AND block_pos_z BETWEEN ? AND ?
-              AND timestamp >= ?`;
-        const params = [dimid, minX, maxX, minY, maxY, minZ, maxZ, timeFrom];
-        if (timeTo) {
-            sql += " AND timestamp <= ?";
-            params.push(timeTo);
-        }
-        sql += " ORDER BY id DESC";
-        if (limit) {
-            sql += " LIMIT ?";
-            params.push(limit);
-        }
-        const result = session.query(sql, params);
+            WHERE block_dimid = ${dimid}
+              AND block_pos_x BETWEEN ${minX} AND ${maxX}
+              AND block_pos_y BETWEEN ${minY} AND ${maxY}
+              AND block_pos_z BETWEEN ${minZ} AND ${maxZ}
+              AND timestamp >= '${esc(timeFrom)}'`;
+        if (timeTo) sql += ` AND timestamp <= '${esc(timeTo)}'`;
+        sql += ` ORDER BY id DESC`;
+        if (limit) sql += ` LIMIT ${limit}`;
+        const result = session.query(sql);
         if (!result || result.length <= 1) return [];
         return result.slice(1);
     } catch (e) {
@@ -150,11 +152,11 @@ function queryOperationsByTime(minX, minY, minZ, maxX, maxY, maxZ, dimid, timeFr
     }
 }
 
-
+// ================= 用户管理 =================
 function getUser(username) {
     if (!session) return null;
     try {
-        const rows = session.query("SELECT * FROM users WHERE username = ?", [username]);
+        const rows = session.query(`SELECT * FROM users WHERE username = '${esc(username)}'`);
         if (!rows || rows.length <= 1) return null;
         const r = rows[1];
         return { id: r[0], username: r[1], password_hash: r[2], role: r[3], created_at: r[4] };
@@ -167,8 +169,8 @@ function getUser(username) {
 function createUser(username, passwordHash, role) {
     if (!session) return;
     try {
-        session.exec("INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, ?, ?)", 
-            [username, passwordHash, role, system.getTimeStr()]);
+        session.exec(`INSERT INTO users (username, password_hash, role, created_at) 
+            VALUES ('${esc(username)}', '${esc(passwordHash)}', '${esc(role)}', '${esc(system.getTimeStr())}')`);
     } catch (e) {
         logger.error("创建用户失败: " + e);
     }
@@ -177,7 +179,7 @@ function createUser(username, passwordHash, role) {
 function deleteUser(username) {
     if (!session) return;
     try {
-        session.exec("DELETE FROM users WHERE username = ?", [username]);
+        session.exec(`DELETE FROM users WHERE username = '${esc(username)}'`);
     } catch (e) {
         logger.error("删除用户失败: " + e);
     }
@@ -200,17 +202,17 @@ function getAllUsers() {
 function updatePassword(username, newHash) {
     if (!session) return;
     try {
-        session.exec("UPDATE users SET password_hash = ? WHERE username = ?", [newHash, username]);
+        session.exec(`UPDATE users SET password_hash = '${esc(newHash)}' WHERE username = '${esc(username)}'`);
     } catch (e) {
         logger.error("更新密码失败: " + e);
     }
 }
 
-
+// ================= Token 管理 =================
 function getToken(token) {
     if (!session) return null;
     try {
-        const rows = session.query("SELECT * FROM tokens WHERE token = ?", [token]);
+        const rows = session.query(`SELECT * FROM tokens WHERE token = '${esc(token)}'`);
         if (!rows || rows.length <= 1) return null;
         const r = rows[1];
         return { token: r[0], role: r[1], used: r[2], created_by: r[3], created_at: r[4] };
@@ -223,8 +225,8 @@ function getToken(token) {
 function insertToken(token, role, creator) {
     if (!session) return;
     try {
-        session.exec("INSERT INTO tokens (token, role, used, created_by, created_at) VALUES (?, ?, 0, ?, ?)",
-            [token, role, creator, system.getTimeStr()]);
+        session.exec(`INSERT INTO tokens (token, role, used, created_by, created_at) 
+            VALUES ('${esc(token)}', '${esc(role)}', 0, '${esc(creator)}', '${esc(system.getTimeStr())}')`);
     } catch (e) {
         logger.error("插入Token失败: " + e);
     }
@@ -233,7 +235,7 @@ function insertToken(token, role, creator) {
 function markTokenUsed(token) {
     if (!session) return;
     try {
-        session.exec("UPDATE tokens SET used = 1 WHERE token = ?", [token]);
+        session.exec(`UPDATE tokens SET used = 1 WHERE token = '${esc(token)}'`);
     } catch (e) {
         logger.error("标记Token失败: " + e);
     }
@@ -242,7 +244,7 @@ function markTokenUsed(token) {
 function deleteToken(token) {
     if (!session) return;
     try {
-        session.exec("DELETE FROM tokens WHERE token = ?", [token]);
+        session.exec(`DELETE FROM tokens WHERE token = '${esc(token)}'`);
     } catch (e) {
         logger.error("删除Token失败: " + e);
     }
@@ -262,57 +264,58 @@ function getAllTokens() {
     }
 }
 
-
+// ================= 初始超级 Token =================
 function createInitialSuperToken() {
     if (!session) {
         logger.error("数据库未初始化，无法生成初始 Token");
         return;
     }
     try {
+        // 使用 query 直接获取结果，完全避免 prepare/step
         const result = session.query("SELECT COUNT(*) AS cnt FROM tokens WHERE used = 0");
         let cnt = 0;
         if (result && result.length > 1 && result[1].length > 0) {
             cnt = result[1][0];
         }
         if (cnt > 0) return;
-
+        
         const token = crypto.randomBytes(16).toString("hex");
         insertToken(token, "superadmin", "System");
-
-        const tokenFile = "plugins/BlockLog/initial_token.txt";
-        File.writeTo(tokenFile, token);
-        logger.warn("首次启动已生成超级管理员 Token，请查看 plugins/BlockLog/initial_token.txt 文件，使用后文件将被自动删除。");
+        logger.warn(`================================================`);
+        logger.warn(`超级管理员一次性Token: ${token}`);
+        logger.warn(`请妥善保管，使用后将失效`);
+        logger.warn(`================================================`);
     } catch (e) {
         logger.error("生成初始Token失败: " + e);
     }
 }
-
-
 function getContainerSnapshot(x, y, z, dimid, beforeTime) {
     if (!session) return {};
     try {
+        // 查询该容器在 beforeTime 之前的所有 container_change，按槽位分组取最新
         const sql = `
-            SELECT container_slot, old_data, id
+            SELECT slot, old_data, id
             FROM operations
             WHERE operation_type = 'container_change'
-              AND block_pos_x = ?
-              AND block_pos_y = ?
-              AND block_pos_z = ?
-              AND block_dimid = ?
-              AND timestamp < ?
+              AND block_pos_x = ${x}
+              AND block_pos_y = ${y}
+              AND block_pos_z = ${z}
+              AND block_dimid = ${dimid}
+              AND timestamp < '${esc(beforeTime)}'
             ORDER BY id DESC
         `;
-        const rows = session.query(sql, [x, y, z, dimid, beforeTime]);
+        const rows = session.query(sql);
         if (!rows || rows.length <= 1) return {};
 
         const snapshot = {};
         const seenSlots = new Set();
+        // 从新到旧遍历，每个槽位只取第一次出现的记录（即最新的一条）
         for (let i = 1; i < rows.length; i++) {
             const r = rows[i];
             const slot = r[0];
             if (seenSlots.has(slot)) continue;
             seenSlots.add(slot);
-            snapshot[slot] = r[1]; 
+            snapshot[slot] = r[1]; // old_data
         }
         return snapshot;
     } catch (e) {
@@ -325,6 +328,42 @@ function closeDatabase() {
     if (session) {
         session.close();
         session = null;
+    }
+}
+
+function getContainerSnapshot(x, y, z, dimid, beforeTime) {
+    if (!session) return {};
+    try {
+        const stmt = session.prepare(`
+            SELECT container_slot, old_data, id
+            FROM operations
+            WHERE operation_type = 'container_change'
+              AND block_pos_x = ?
+              AND block_pos_y = ?
+              AND block_pos_z = ?
+              AND block_dimid = ?
+              AND timestamp < ?
+            ORDER BY id DESC
+        `);
+        stmt.bind([x, y, z, dimid, beforeTime]);
+        stmt.execute();
+        const rows = stmt.fetchAll();
+        if (!rows || rows.length <= 1) return {};
+
+        const snapshot = {};
+        const seenSlots = new Set();
+        // 从最近的记录开始遍历，只取每个 slot 第一次出现的 old_data
+        for (let i = 1; i < rows.length; i++) {
+            const r = rows[i];
+            const slot = r[0];
+            if (seenSlots.has(slot)) continue;
+            seenSlots.add(slot);
+            snapshot[slot] = r[1]; // old_data 字符串
+        }
+        return snapshot;
+    } catch (e) {
+        logger.error("获取容器快照失败: " + e);
+        return {};
     }
 }
 
