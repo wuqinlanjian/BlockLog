@@ -1,5 +1,5 @@
 // modules/command.js
-const { queryOperations, queryOperationsByTime, insertOperation, getSession, closeDatabase, createInitialSuperToken, getContainerSnapshot } = require("./database");
+const { queryOperations, queryOperationsByTime, insertOperation, getSession, closeDatabase, createInitialSuperToken, getContainerSnapshot, uidToName, resolveTypeInJson } = require("./database.js");
 
 let globalConfig = {};
 let isConsumerActive = true;
@@ -18,7 +18,6 @@ function shortBlockName(fullType) {
     return fullType.replace(/^minecraft:/, "");
 }
 
-
 const actionMap = {
     place:           { group: "+block",        desc: "放置方块" },
     destroy:         { group: "-block",        desc: "破坏方块" },
@@ -33,7 +32,6 @@ const actionMap = {
 function getGroupByType(type) {
     return actionMap[type] ? actionMap[type].group : type;
 }
-
 
 function parseTime(str) {
     if (!str) return null;
@@ -74,13 +72,11 @@ function parseTimeRange(str) {
     return { from: null, to: null };
 }
 
-
 function relativeTime(timestamp) {
     const now = Date.now();
     const then = new Date(timestamp.replace(" ", "T")).getTime();
     let diff = Math.floor((now - then) / 1000);
     if (diff < 0) diff = 0;
-    if (diff < 0) return "0秒前";
     if (diff < 60) return `${diff}秒前`;
     const mins = Math.floor(diff / 60);
     if (mins < 60) return `${mins}分钟前`;
@@ -90,16 +86,15 @@ function relativeTime(timestamp) {
     return `${days}天前`;
 }
 
-
 function parseArgs(raw) {
     const params = {
-        users: [],      // u:
-        time: null,     // t:
-        radius: null,   // r:
-        action: null,   // a:
-        include: [],    // i:
-        exclude: [],    // e:
-        flags: [],      // #
+        users: [],
+        time: null,
+        radius: null,
+        action: null,
+        include: [],
+        exclude: [],
+        flags: [],
         limit: 9999999999
     };
     if (!raw) return params;
@@ -190,6 +185,7 @@ function lookup(params, player) {
     }
     if (params.include.length > 0 || params.exclude.length > 0) {
         ops = ops.filter(op => {
+            // 对于方块类型操作，需要检查包含/排除
             const dataStr = op[1] === 'place' || op[1] === 'destroy' || op[1] === 'explode_block' || op[1] === 'liquid_react'
                 ? (op[1] === 'place' ? op[13] : op[12])
                 : op[13] || op[12];
@@ -197,7 +193,7 @@ function lookup(params, player) {
             
             let blockType = null;
             try {
-                const data = JSON.parse(dataStr);
+                const data = JSON.parse(resolveTypeInJson(dataStr)); // 还原为名称
                 blockType = data.type || data.name;
             } catch(e) {}
             if (params.include.length > 0) {
@@ -215,15 +211,25 @@ function lookup(params, player) {
 }
 
 function formatRecord(op, showCoord = true) {
-    const type = op[1];
-    const playerName = op[3] || "??";
-    const bx = op[8], by = op[9], bz = op[10];
-    const timestamp = op[15];
+    // 先将op中的old_data/new_data还原为可读字符串
+    const oldDataRaw = op[12];
+    const newDataRaw = op[13];
+    const oldData = resolveTypeInJson(oldDataRaw);
+    const newData = resolveTypeInJson(newDataRaw);
+    // 构建一个临时op副本用于后续解析
+    const opResolved = [...op];
+    opResolved[12] = oldData;
+    opResolved[13] = newData;
+
+    const type = opResolved[1];
+    const playerName = opResolved[3] || "??";
+    const bx = opResolved[8], by = opResolved[9], bz = opResolved[10];
+    const timestamp = opResolved[15];
     const relTime = relativeTime(timestamp);
     const group = getGroupByType(type);
     
     let desc = "";
-    const dataStr = type === "place" ? op[13] : op[12];
+    const dataStr = type === "place" ? opResolved[13] : opResolved[12];
     let itemName = "?";
     let count = 1;
     if (dataStr) {
@@ -239,19 +245,19 @@ function formatRecord(op, showCoord = true) {
     } else if (group === "-block") {
         desc = `§c- §f${playerName} §b破坏 §fx${count} §7${itemName}`;
     } else if (group === "container" || group === "inventory") {
-        const newData = op[13], oldData = op[12];
         let action, item, count = 1;
-        if (newData && !oldData) {
+        const newD = newData, oldD = oldData;
+        if (newD && !oldD) {
             action = "放入";
             try { 
-                const d = JSON.parse(newData);
+                const d = JSON.parse(newD);
                 item = d.name || "?";
                 count = d.count || 1;
             } catch(e) { item = "?"; }
-        } else if (!newData && oldData) {
+        } else if (!newD && oldD) {
             action = "取出";
             try { 
-                const d = JSON.parse(oldData);
+                const d = JSON.parse(oldD);
                 item = d.name || "?";
                 count = d.count || 1;
             } catch(e) { item = "?"; }
@@ -265,7 +271,7 @@ function formatRecord(op, showCoord = true) {
             const extraStr = op[16];
             if (extraStr) {
                 try {
-                    const extra = JSON.parse(extraStr);
+                    const extra = JSON.parse(resolveTypeInJson(extraStr));
                     const containerName = extra.name || extra.type;
                     if (containerName) {
                         desc += ` §8(§6${shortBlockName(containerName)}§8)`;
@@ -311,7 +317,6 @@ function showPaginatedChat(player, ops, page = 1) {
     }
 }
 
-
 function performRollback(player, ops, isRestore = false) {
     let success = 0;
     let fail = 0;
@@ -320,8 +325,9 @@ function performRollback(player, ops, isRestore = false) {
     for (const op of sortedOps) {
         const type = op[1];
         const blockPos = { x: op[8], y: op[9], z: op[10], dimid: op[11] };
-        const oldData = op[12];
-        const newData = op[13];
+        // 还原类型为名称
+        const oldData = resolveTypeInJson(op[12]);
+        const newData = resolveTypeInJson(op[13]);
         const slot = op[14];
         try {
             if (isRestore) {
@@ -338,84 +344,50 @@ function performRollback(player, ops, isRestore = false) {
                             success++;
                         }
                         break;
-                        case "container_change":
-                        case "inventory_change": {
-                            let container = null;
-                            if (type === "container_change") {
-                                // 先尝试获取方块容器
-                                let block = mc.getBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid);
-                                if (block && block.hasContainer()) {
-                                    container = block.getContainer();
-                                } else {
-                                    // 如果当前没有容器方块，则根据记录中的 extra 信息恢复方块
-                                    const extra = op[16];
-                                    if (extra) {
-                                        try {
-                                            const blockInfo = JSON.parse(extra);
-                                            if (blockInfo.type) {
-                                                mc.setBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid, blockInfo.type, blockInfo.tileData || 0);
-                                                // 恢复方块NBT（如有）
-                                                if (blockInfo.nbt) {
-                                                    block = mc.getBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid);
-                                                    if (block && blockInfo.nbt) {
-                                                        const nbt = NBT.parseSNBT(blockInfo.nbt);
-                                                        if (nbt) block.setNbt(nbt);
-                                                    }
-                                                }
-                                                // 重新获取容器
-                                                block = mc.getBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid);
-                                                if (block && block.hasContainer()) {
-                                                    container = block.getContainer();
-                                                }
-                                            }
-                                        } catch(e) {}
-                                    }
-                                }
-                            } else {
-                                // inventory_change 的处理保持不变
-                                if (player && blockPos.x === player.blockPos.x && blockPos.y === player.blockPos.y && blockPos.z === player.blockPos.z) {
-                                    container = player.getInventory();
-                                }
-                            }
-
-                            if (container && slot !== null) {
-                                if (oldData) {
-                                    const info = JSON.parse(oldData);
-                                    const item = mc.newItem(info.type, info.count);
-                                    item.setAux(info.aux || 0);
-                                    item.setDamage(info.damage || 0);
-                                    if (info.nbt) {
-                                        const nbt = NBT.parseSNBT(info.nbt);
-                                        if (nbt) item.setNbt(nbt);
-                                    }
-                                    container.setItem(slot, item);
-                                } else {
-                                    container.setItem(slot, mc.newItem("minecraft:air", 0));
-                                }
-                                success++;
-                            } else {
-                                logger.warn(`容器回档失败：无法获取容器 slot=${slot} pos=${blockPos.x},${blockPos.y},${blockPos.z}`);
-                            }
-                            break;
-                        }
                     case "container_change":
                     case "inventory_change": {
-                        const block = mc.getBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid);
                         let container = null;
-                        if (block && block.hasContainer()) container = block.getContainer();
-                        else if (player && blockPos.x === player.blockPos.x && blockPos.y === player.blockPos.y && blockPos.z === player.blockPos.z) container = player.getInventory();
+                        if (type === "container_change") {
+                            let block = mc.getBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid);
+                            if (block && block.hasContainer()) {
+                                container = block.getContainer();
+                            } else {
+                                const extra = op[16];
+                                if (extra) {
+                                    try {
+                                        const blockInfo = JSON.parse(resolveTypeInJson(extra));
+                                        if (blockInfo.type) {
+                                            mc.setBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid, blockInfo.type, blockInfo.tileData || 0);
+                                            block = mc.getBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid);
+                                            if (block && block.hasContainer()) {
+                                                container = block.getContainer();
+                                            }
+                                        }
+                                    } catch(e) {}
+                                }
+                            }
+                        } else {
+                            if (player && blockPos.x === player.blockPos.x && blockPos.y === player.blockPos.y && blockPos.z === player.blockPos.z) {
+                                container = player.getInventory();
+                            }
+                        }
                         if (container && slot !== null) {
-                            if (newData) {
-                                const info = JSON.parse(newData);
+                            if (oldData) {
+                                const info = JSON.parse(oldData);
                                 const item = mc.newItem(info.type, info.count);
                                 item.setAux(info.aux || 0);
                                 item.setDamage(info.damage || 0);
-                                if (info.nbt) { const nbt = NBT.parseSNBT(info.nbt); if (nbt) item.setNbt(nbt); }
+                                if (info.nbt) {
+                                    const nbt = NBT.parseSNBT(info.nbt);
+                                    if (nbt) item.setNbt(nbt);
+                                }
                                 container.setItem(slot, item);
                             } else {
                                 container.setItem(slot, mc.newItem("minecraft:air", 0));
                             }
                             success++;
+                        } else {
+                            logger.warn(`容器回档失败：无法获取容器 slot=${slot} pos=${blockPos.x},${blockPos.y},${blockPos.z}`);
                         }
                         break;
                     }
@@ -426,119 +398,96 @@ function performRollback(player, ops, isRestore = false) {
                         mc.setBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid, "minecraft:air", 0);
                         success++;
                         break;
-                        case "destroy":
-                            case "explode_block":
-                                if (oldData) {
-                                    const info = JSON.parse(oldData);
-                                    // 先设置方块类型和 tileData
-                                    mc.setBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid, info.type, info.tileData || 0);
-                                    let block = mc.getBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid);
-                            
-                                    // 强力恢复方块NBT（包括朝向等），如果 nbt 字段有效
-                                    if (info.nbt && block) {
-                                        const nbt = NBT.parseSNBT(info.nbt);
-                                        if (nbt) {
-                                            block.setNbt(nbt);
-                                            // 重新获取 block 对象以确保后续操作基于最新数据
-                                            block = mc.getBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid);
-                                        }
-                                    }
-                            
-                                    // 恢复方块实体NBT（如果方块有方块实体）
-                                    if (info.beNbt && block && block.hasBlockEntity()) {
-                                        const be = block.getBlockEntity();
-                                        if (be) {
-                                            const beNbt = NBT.parseSNBT(info.beNbt);
-                                            if (beNbt) be.setNbt(beNbt);
-                                        }
-                                    }
-                            
-                                    // 恢复容器内容（原有代码保持不变）
-                                    if (block && block.hasContainer()) {
-                                        const snapshot = getContainerSnapshot(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid, op[15]);
-                                        const container = block.getContainer();
-                                        if (container) {
-                                            container.removeAllItems();
-                                            for (const [slot, data] of Object.entries(snapshot)) {
-                                                if (data) {
-                                                    try {
-                                                        const itemInfo = JSON.parse(data);
-                                                        const item = mc.newItem(itemInfo.type, itemInfo.count);
-                                                        item.setAux(itemInfo.aux || 0);
-                                                        item.setDamage(itemInfo.damage || 0);
-                                                        if (itemInfo.nbt) {
-                                                            const nbt = NBT.parseSNBT(itemInfo.nbt);
-                                                            if (nbt) item.setNbt(nbt);
-                                                        }
-                                                        container.setItem(parseInt(slot), item);
-                                                    } catch(e) {}
-                                                }
-                                            }
-                                        }
-                                    }
-                            
-                                    // 原有的爆炸火焰清理（保持不变）
-                                    if (type === "explode_block") {
-                                        const firePositions = [
-                                            [blockPos.x,     blockPos.y + 1, blockPos.z    ],
-                                            [blockPos.x + 1, blockPos.y,     blockPos.z    ],
-                                            [blockPos.x - 1, blockPos.y,     blockPos.z    ],
-                                            [blockPos.x,     blockPos.y,     blockPos.z + 1],
-                                            [blockPos.x,     blockPos.y,     blockPos.z - 1]
-                                        ];
-                                    }
-                                    success++;
-                                }
-                                break;
-                        case "container_change":
-                        case "inventory_change": {
-                            let container = null;
-                            const block = mc.getBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid);
-                            
-                            if (type === "container_change") {
-                                if (block && block.hasContainer()) {
-                                    container = block.getContainer();
-                                } else {
-                                    const extra = op[16];
-                                    if (extra) {
-                                        try {
-                                            const blockInfo = JSON.parse(extra);
-                                            if (blockInfo.type) {
-                                                mc.setBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid, blockInfo.type, blockInfo.tileData || 0);
-                                                const newBlock = mc.getBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid);
-                                                if (newBlock && newBlock.hasContainer()) {
-                                                    container = newBlock.getContainer();
-                                                }
-                                            }
-                                        } catch(e) {}
-                                    }
-                                }
-                            } else {
-                                if (player && blockPos.x === player.blockPos.x && blockPos.y === player.blockPos.y && blockPos.z === player.blockPos.z) {
-                                    container = player.getInventory();
+                    case "destroy":
+                    case "explode_block":
+                        if (oldData) {
+                            const info = JSON.parse(oldData);
+                            mc.setBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid, info.type, info.tileData || 0);
+                            let block = mc.getBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid);
+                            if (info.nbt && block) {
+                                const nbt = NBT.parseSNBT(info.nbt);
+                                if (nbt) {
+                                    block.setNbt(nbt);
+                                    block = mc.getBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid);
                                 }
                             }
-                        
-                            if (container && slot !== null) {
-                                if (oldData) {
-                                    const info = JSON.parse(oldData);
-                                    const item = mc.newItem(info.type, info.count);
-                                    item.setAux(info.aux || 0);
-                                    item.setDamage(info.damage || 0);
-                                    if (info.nbt) {
-                                        const nbt = NBT.parseSNBT(info.nbt);
-                                        if (nbt) item.setNbt(nbt);
-                                    }
-                                    container.setItem(slot, item);
-                                } else {
-                                    container.setItem(slot, mc.newItem("minecraft:air", 0));
+                            if (info.beNbt && block && block.hasBlockEntity()) {
+                                const be = block.getBlockEntity();
+                                if (be) {
+                                    const beNbt = NBT.parseSNBT(info.beNbt);
+                                    if (beNbt) be.setNbt(beNbt);
                                 }
-                                success++;
-                            } else {
-                                logger.warn(`容器回档失败：无法获取容器 slot=${slot} pos=${blockPos.x},${blockPos.y},${blockPos.z}`);
                             }
-                            break;
+                            if (block && block.hasContainer()) {
+                                const snapshot = getContainerSnapshot(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid, op[15]);
+                                const container = block.getContainer();
+                                if (container) {
+                                    container.removeAllItems();
+                                    for (const [slot, data] of Object.entries(snapshot)) {
+                                        if (data) {
+                                            try {
+                                                const itemInfo = JSON.parse(resolveTypeInJson(data));
+                                                const item = mc.newItem(itemInfo.type, itemInfo.count);
+                                                item.setAux(itemInfo.aux || 0);
+                                                item.setDamage(itemInfo.damage || 0);
+                                                if (itemInfo.nbt) {
+                                                    const nbt = NBT.parseSNBT(itemInfo.nbt);
+                                                    if (nbt) item.setNbt(nbt);
+                                                }
+                                                container.setItem(parseInt(slot), item);
+                                            } catch(e) {}
+                                        }
+                                    }
+                                }
+                            }
+                            success++;
                         }
+                        break;
+                    case "container_change":
+                    case "inventory_change": {
+                        let container = null;
+                        const block = mc.getBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid);
+                        if (type === "container_change") {
+                            if (block && block.hasContainer()) {
+                                container = block.getContainer();
+                            } else {
+                                const extra = op[16];
+                                if (extra) {
+                                    try {
+                                        const blockInfo = JSON.parse(resolveTypeInJson(extra));
+                                        if (blockInfo.type) {
+                                            mc.setBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid, blockInfo.type, blockInfo.tileData || 0);
+                                            const newBlock = mc.getBlock(blockPos.x, blockPos.y, blockPos.z, blockPos.dimid);
+                                            if (newBlock && newBlock.hasContainer()) {
+                                                container = newBlock.getContainer();
+                                            }
+                                        }
+                                    } catch(e) {}
+                                }
+                            }
+                        } else {
+                            if (player && blockPos.x === player.blockPos.x && blockPos.y === player.blockPos.y && blockPos.z === player.blockPos.z) {
+                                container = player.getInventory();
+                            }
+                        }
+                        if (container && slot !== null) {
+                            if (oldData) {
+                                const info = JSON.parse(oldData);
+                                const item = mc.newItem(info.type, info.count);
+                                item.setAux(info.aux || 0);
+                                item.setDamage(info.damage || 0);
+                                if (info.nbt) {
+                                    const nbt = NBT.parseSNBT(info.nbt);
+                                    if (nbt) item.setNbt(nbt);
+                                }
+                                container.setItem(slot, item);
+                            } else {
+                                container.setItem(slot, mc.newItem("minecraft:air", 0));
+                            }
+                            success++;
+                        }
+                        break;
+                    }
                     case "liquid_react":
                         if (oldData) {
                             const info = JSON.parse(oldData);
@@ -616,7 +565,6 @@ function registerCommand() {
                             params.radius = 200;
                             output.success("搜索半径已自动限制为 200 格（普通玩家上限）");
                         }
-                    } else {
                     }
                 }
                 
@@ -696,7 +644,6 @@ function registerCommand() {
                     if (rows && rows.length > 1) totalRecords = rows[1][0];
                 }
             
-                // 获取数据库文件大小
                 let dbSizeStr = "未知";
                 const dbPath = "plugins/BlockLog/blocklog.db";
                 if (File.exists(dbPath)) {
@@ -710,9 +657,9 @@ function registerCommand() {
             
                 const msg = [
                     `§3BlockLog 状态`,
-                    `§b版本: §f${globalConfig.version || "1.0.0"}`,
+                    `§b版本: §f${globalConfig.version || "1.0.1"}`,
                     `§b数据库: §f${db ? "已连接" : "未连接"}`,
-                    `§b数据库大小: §f${dbSizeStr}`,  // 新增行
+                    `§b数据库大小: §f${dbSizeStr}`,
                     `§b记录总数: §f${totalRecords}`,
                     `§b事件记录: §f${isConsumerActive ? "开启" : "暂停"}`,
                     `§b在线玩家: §f${mc.getOnlinePlayers().length}`
