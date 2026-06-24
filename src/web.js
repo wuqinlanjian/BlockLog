@@ -5,14 +5,13 @@ const path = require("path");
 const { 
     queryOperations, queryOperationsByTime, getUser, createUser, deleteUser, getAllUsers,
     getToken, insertToken, markTokenUsed, deleteToken, getAllTokens, updatePassword, 
-    getSession 
-} = require("./modules/database");
-const { hashPassword, checkPassword, generateToken } = require("./modules/auth");
+    getSession, uidToName, resolveTypeInJson 
+} = require("./modules/database.js"); 
+const { hashPassword, checkPassword, generateToken } = require("./modules/auth.js");
 
 class LseSessionStore extends session.Store {
     constructor() {
         super();
-
         this._cleanupInterval = setInterval(() => this.clearExpired(), 60 * 60 * 1000);
     }
 
@@ -84,7 +83,6 @@ class LseSessionStore extends session.Store {
 
 const roleLevel = { user: 0, admin: 1, superadmin: 2 };
 
-
 function auth(requiredRole) {
     return (req, res, next) => {
         if (!req.session.username) return res.status(401).json({ error: "未登录" });
@@ -119,7 +117,6 @@ function startServer(config) {
         }
     }));
 
-
     app.use(express.static(path.join(__dirname, "..", "public")));
 
     app.post("/api/login", (req, res) => {
@@ -137,7 +134,6 @@ function startServer(config) {
         }
     });
 
-
     app.post("/api/login-token", (req, res) => {
         try {
             const { token } = req.body || {};
@@ -150,7 +146,6 @@ function startServer(config) {
             res.status(500).json({ error: "服务器内部错误" });
         }
     });
-
 
     app.post("/api/register", (req, res) => {
         try {
@@ -172,7 +167,6 @@ function startServer(config) {
         }
     });
 
-
     app.post("/api/logout", auth("user"), (req, res) => {
         req.session.destroy((err) => {
             if (err) return res.status(500).json({ error: "登出失败" });
@@ -180,6 +174,7 @@ function startServer(config) {
             res.json({ success: true });
         });
     });
+
     app.get("/api/me", auth("user"), (req, res) => {
         res.json({ username: req.user.username, role: req.user.role });
     });
@@ -199,7 +194,6 @@ function startServer(config) {
         }
     });
 
-    // 查询操作记录
     app.get("/api/operations", auth("user"), (req, res) => {
         try {
             const { minX, minY, minZ, maxX, maxY, maxZ, dimid, timeFrom, timeTo, limit } = req.query;
@@ -224,8 +218,8 @@ function startServer(config) {
                 player_name: op[3],
                 block_x: op[8], block_y: op[9], block_z: op[10],
                 dimid: op[11],
-                old_data: op[12],
-                new_data: op[13],
+                old_data: resolveTypeInJson(op[12]),
+                new_data: resolveTypeInJson(op[13]),
                 slot: op[14],
                 timestamp: op[15]
             }));
@@ -240,7 +234,6 @@ function startServer(config) {
         }
     });
 
-
     app.get("/api/operations/latest", auth("user"), (req, res) => {
         try {
             const db = getSession();
@@ -254,6 +247,8 @@ function startServer(config) {
                 player_name: op[3],
                 block_x: op[8], block_y: op[9], block_z: op[10],
                 dimid: op[11],
+                old_data: resolveTypeInJson(op[12]),
+                new_data: resolveTypeInJson(op[13]),
                 timestamp: op[15]
             }));
             res.json(result);
@@ -266,36 +261,31 @@ function startServer(config) {
     app.post("/api/rollback", auth("admin"), (req, res) => {
         try {
             const { operationIds } = req.body || {};
-            logger.info("回档请求 operationIds: " + JSON.stringify(operationIds));
-    
             if (!operationIds || !Array.isArray(operationIds) || operationIds.length === 0) {
                 return res.status(400).json({ error: "请选择需要回档的操作" });
             }
             const ids = operationIds.map(id => parseInt(id)).filter(id => !isNaN(id));
             if (ids.length === 0) return res.status(400).json({ error: "无效的操作ID" });
-    
+
             const idList = ids.join(',');
             const db = getSession();
             if (!db) return res.status(500).json({ error: "数据库未连接" });
-    
+
             const sql = `SELECT * FROM operations WHERE id IN (${idList}) ORDER BY id ASC`;
-            logger.info("回档SQL: " + sql);
             const rows = db.query(sql);
-            logger.info("回档查询结果行数: " + (rows ? rows.length : 0));
-    
             if (!rows || rows.length <= 1) {
                 return res.json({ success: 0, total: 0, results: [], message: "未找到指定操作" });
             }
-    
+
             const ops = rows.slice(1);
-            logger.info("实际待回档记录数: " + ops.length);
-    
             let success = 0;
             const results = [];
-    
+
             for (const op of ops) {
                 const id = op[0], type = op[1], bx = op[8], by = op[9], bz = op[10], bdim = op[11];
-                const oldData = op[12], slot = op[14];
+                // 还原类型名称
+                const oldData = resolveTypeInJson(op[12]);
+                const slot = op[14];
                 const resultItem = {
                     id,
                     type,
@@ -314,11 +304,14 @@ function startServer(config) {
                             if (oldData) {
                                 const oldInfo = JSON.parse(oldData);
                                 mc.setBlock(bx, by, bz, bdim, oldInfo.type, oldInfo.tileData || 0);
-                                const block = mc.getBlock(bx, by, bz, bdim);
+                                let block = mc.getBlock(bx, by, bz, bdim);
                                 if (block) {
                                     if (oldInfo.nbt) {
                                         const nbt = NBT.parseSNBT(oldInfo.nbt);
-                                        if (nbt) block.setNbt(nbt);
+                                        if (nbt) {
+                                            block.setNbt(nbt);
+                                            block = mc.getBlock(bx, by, bz, bdim);
+                                        }
                                     }
                                     if (oldInfo.beNbt && block.hasBlockEntity()) {
                                         const be = block.getBlockEntity();
@@ -376,7 +369,6 @@ function startServer(config) {
                                 success++;
                             }
                             break;
-                            
                     }
                 } catch (e) {
                     resultItem.status = 'failed';
@@ -385,15 +377,15 @@ function startServer(config) {
                 }
                 results.push(resultItem);
             }
-    
-            logger.info(`回档完成，成功 ${success} / ${ops.length}`);
+
             res.json({ success: true, count: success, total: ops.length, results });
         } catch (e) {
             logger.error("回档API异常: " + e);
             res.status(500).json({ error: "回档失败，服务器内部错误" });
         }
     });
-    
+
+    // ================== 超管功能 ==================
     app.get("/api/users", auth("superadmin"), (req, res) => {
         try {
             const users = getAllUsers();
@@ -492,16 +484,11 @@ function startServer(config) {
         }
     });
 
-    // 前端 fallback
     app.get("*", (req, res) => {
         if (req.path.startsWith("/api")) {
             return res.status(404).json({ error: "Not found" });
         }
         res.sendFile(path.join(__dirname, "..", "public", "index.html"));
-    });
-
-    app.listen(config.webPort, () => {
-        logger.info(`BlockLog Web 面板已启动: http://localhost:${config.webPort}`);
     });
 
     serverInstance = app.listen(config.webPort, () => {
@@ -518,7 +505,6 @@ function startServer(config) {
 }
 
 function stopServer() {
-    // 关闭 HTTP 服务器
     if (serverInstance) {
         serverInstance.close();
         serverInstance = null;
@@ -528,6 +514,5 @@ function stopServer() {
         storeInstance = null;
     }
 }
-
 
 module.exports = { startServer, stopServer };
