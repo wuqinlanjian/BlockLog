@@ -61,6 +61,17 @@ function initDatabase() {
                 expired TEXT NOT NULL
             );
         `);
+        // 新增物品/方块类型映射表
+        session.exec(`
+            CREATE TABLE IF NOT EXISTS block_items (
+                uid INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL
+            );
+        `);
+
+        // 自动迁移旧数据（若映射表为空但operations有数据）
+        migrateOldData();
+
         logger.info("BlockLog 数据库初始化完成");
     } catch (e) {
         logger.error("数据库初始化失败: " + e);
@@ -69,19 +80,154 @@ function initDatabase() {
     }
 }
 
-// 安全转义字符串（单引号替换为两个单引号）
+// 安全转义字符串
 function esc(str) {
     if (typeof str !== "string") return str;
     return str.replace(/'/g, "''");
 }
 
-// 插入操作记录
+// ============= 类型映射函数 =============
+function nameToUid(name) {
+    if (!session) return name; // 退化处理
+    try {
+        const rows = session.query(`SELECT uid FROM block_items WHERE name = '${esc(name)}'`);
+        if (rows && rows.length > 1) return rows[1][0];
+        // 不存在则插入
+        session.exec(`INSERT INTO block_items (name) VALUES ('${esc(name)}')`);
+        const newRows = session.query(`SELECT uid FROM block_items WHERE name = '${esc(name)}'`);
+        if (newRows && newRows.length > 1) return newRows[1][0];
+    } catch (e) {
+        logger.error("nameToUid failed: " + e);
+    }
+    return name;
+}
+
+function uidToName(uid) {
+    if (!session) return uid;
+    try {
+        const rows = session.query(`SELECT name FROM block_items WHERE uid = ${uid}`);
+        if (rows && rows.length > 1) return rows[1][0];
+    } catch (e) {
+        logger.error("uidToName failed: " + e);
+    }
+    return uid;
+}
+
+// 将JSON字符串中的type字段（值可能为数字uid或字符串）统一转换为名称字符串
+function resolveTypeInJson(jsonStr) {
+    if (!jsonStr || jsonStr === "null") return jsonStr;
+    try {
+        const obj = JSON.parse(jsonStr);
+        if (obj.type !== undefined) {
+            obj.type = uidToName(obj.type);
+        }
+        // 同时处理可能存在的 name 字段（某些记录也用name存储类型）
+        if (obj.name !== undefined && typeof obj.name === 'number') {
+            obj.name = uidToName(obj.name);
+        }
+        return JSON.stringify(obj);
+    } catch (e) {
+        return jsonStr;
+    }
+}
+
+// 将JSON字符串中的type字段转换为数字uid，用于存储
+function replaceTypeWithUid(jsonStr) {
+    if (!jsonStr || jsonStr === "null") return jsonStr;
+    try {
+        const obj = JSON.parse(jsonStr);
+        if (obj.type !== undefined) {
+            obj.type = nameToUid(obj.type);
+        }
+        if (obj.name !== undefined && typeof obj.name === 'string') {
+            obj.name = nameToUid(obj.name);
+        }
+        return JSON.stringify(obj);
+    } catch (e) {
+        return jsonStr;
+    }
+}
+
+// ============= 旧数据迁移 =============
+function migrateOldData() {
+    if (!session) return;
+    try {
+        const emptyCheck = session.query("SELECT COUNT(*) AS cnt FROM block_items");
+        let cnt = 0;
+        if (emptyCheck && emptyCheck.length > 1) cnt = emptyCheck[1][0];
+        if (cnt > 0) return; // 已经迁移过
+
+        const rows = session.query("SELECT id, old_data, new_data, extra FROM operations");
+        if (!rows || rows.length <= 1) {
+            logger.info("没有需要迁移的旧数据");
+            return;
+        }
+
+        logger.info("检测到旧版本数据，开始迁移...");
+        const updates = [];
+        let totalSavedBytes = 0;
+        const allTypes = new Set();
+
+        // 第一遍：收集所有类型字符串并建立映射
+        for (let i = 1; i < rows.length; i++) {
+            const [id, oldData, newData, extra] = rows[i];
+            for (const field of [oldData, newData, extra]) {
+                if (!field || field === "null") continue;
+                try {
+                    const obj = JSON.parse(field);
+                    if (obj.type && typeof obj.type === 'string') {
+                        allTypes.add(obj.type);
+                    }
+                    if (obj.name && typeof obj.name === 'string') {
+                        allTypes.add(obj.name);
+                    }
+                } catch (e) {}
+            }
+        }
+
+        for (const t of allTypes) {
+            nameToUid(t); // 插入映射表
+        }
+        const mapCount = allTypes.size;
+
+        // 第二遍：更新每条记录
+        for (let i = 1; i < rows.length; i++) {
+            const [id, oldData, newData, extra] = rows[i];
+            const newOld = replaceTypeWithUid(oldData);
+            const newNew = replaceTypeWithUid(newData);
+            const newExtra = replaceTypeWithUid(extra);
+
+            // 计算节省的空间（粗略按字符串长度差）
+            const oldLen = (oldData || "").length + (newData || "").length + (extra || "").length;
+            const newLen = (newOld || "").length + (newNew || "").length + (newExtra || "").length;
+            totalSavedBytes += Math.max(0, oldLen - newLen);
+
+            updates.push([id, newOld, newNew, newExtra]);
+        }
+
+        // 批量更新（逐条执行，因为 LLSE SQLite 不支持批量）
+        for (const [id, oldD, newD, extraD] of updates) {
+            session.exec(`UPDATE operations SET old_data = '${esc(oldD)}', new_data = '${esc(newD)}', extra = '${esc(extraD)}' WHERE id = ${id}`);
+        }
+
+        logger.info(`迁移完成！创建了 ${mapCount} 项物品/方块映射表，预计节省 ${(totalSavedBytes / 1024).toFixed(2)} KB 存储空间`);
+    } catch (e) {
+        logger.error("数据迁移失败: " + e);
+    }
+}
+
+// ============= 插入操作记录（适配 uid） =============
 function insertOperation(data) {
     if (!session) {
         logger.warn("BlockLog: 数据库未初始化，无法记录操作");
         return;
     }
     try {
+        // 将 oldData/newData/extra 中的 type 替换为 uid
+        const oldUid = replaceTypeWithUid(data.oldData || "");
+        const newUid = replaceTypeWithUid(data.newData || "");
+        const extraUid = replaceTypeWithUid(data.extra || "");
+
         const sql = `INSERT INTO operations 
             (operation_type, player_xuid, player_name, player_pos_x, player_pos_y, player_pos_z, player_dimid,
              block_pos_x, block_pos_y, block_pos_z, block_dimid,
@@ -98,11 +244,11 @@ function insertOperation(data) {
                 ${data.blockPos?.y ?? null},
                 ${data.blockPos?.z ?? null},
                 ${data.blockPos?.dimid ?? null},
-                '${esc(data.oldData || "")}',
-                '${esc(data.newData || "")}',
+                '${esc(oldUid)}',
+                '${esc(newUid)}',
                 ${data.slot ?? null},
                 '${esc(data.time || system.getTimeStr())}',
-                '${esc(data.extra || "")}'
+                '${esc(extraUid)}'
             )`;
         session.exec(sql);
     } catch (e) {
@@ -110,7 +256,7 @@ function insertOperation(data) {
     }
 }
 
-// 查询操作记录（不带时间筛选）
+// 查询操作记录（不带时间筛选） - 返回原始数据，由上层还原
 function queryOperations(minX, minY, minZ, maxX, maxY, maxZ, dimid, limit = null) {
     if (!session) return [];
     try {
@@ -130,7 +276,7 @@ function queryOperations(minX, minY, minZ, maxX, maxY, maxZ, dimid, limit = null
     }
 }
 
-// 按时间查询操作记录
+// 按时间查询操作记录 - 返回原始数据
 function queryOperationsByTime(minX, minY, minZ, maxX, maxY, maxZ, dimid, timeFrom, timeTo = null, limit = null) {
     if (!session) return [];
     try {
@@ -271,7 +417,6 @@ function createInitialSuperToken() {
         return;
     }
     try {
-        // 使用 query 直接获取结果，完全避免 prepare/step
         const result = session.query("SELECT COUNT(*) AS cnt FROM tokens WHERE used = 0");
         let cnt = 0;
         if (result && result.length > 1 && result[1].length > 0) {
@@ -289,12 +434,13 @@ function createInitialSuperToken() {
         logger.error("生成初始Token失败: " + e);
     }
 }
+
 function getContainerSnapshot(x, y, z, dimid, beforeTime) {
     if (!session) return {};
     try {
         // 查询该容器在 beforeTime 之前的所有 container_change，按槽位分组取最新
         const sql = `
-            SELECT slot, old_data, id
+            SELECT container_slot, old_data, id
             FROM operations
             WHERE operation_type = 'container_change'
               AND block_pos_x = ${x}
@@ -309,13 +455,12 @@ function getContainerSnapshot(x, y, z, dimid, beforeTime) {
 
         const snapshot = {};
         const seenSlots = new Set();
-        // 从新到旧遍历，每个槽位只取第一次出现的记录（即最新的一条）
         for (let i = 1; i < rows.length; i++) {
             const r = rows[i];
             const slot = r[0];
             if (seenSlots.has(slot)) continue;
             seenSlots.add(slot);
-            snapshot[slot] = r[1]; // old_data
+            snapshot[slot] = r[1]; // old_data 仍为uid格式，调用者负责还原
         }
         return snapshot;
     } catch (e) {
@@ -328,42 +473,6 @@ function closeDatabase() {
     if (session) {
         session.close();
         session = null;
-    }
-}
-
-function getContainerSnapshot(x, y, z, dimid, beforeTime) {
-    if (!session) return {};
-    try {
-        const stmt = session.prepare(`
-            SELECT container_slot, old_data, id
-            FROM operations
-            WHERE operation_type = 'container_change'
-              AND block_pos_x = ?
-              AND block_pos_y = ?
-              AND block_pos_z = ?
-              AND block_dimid = ?
-              AND timestamp < ?
-            ORDER BY id DESC
-        `);
-        stmt.bind([x, y, z, dimid, beforeTime]);
-        stmt.execute();
-        const rows = stmt.fetchAll();
-        if (!rows || rows.length <= 1) return {};
-
-        const snapshot = {};
-        const seenSlots = new Set();
-        // 从最近的记录开始遍历，只取每个 slot 第一次出现的 old_data
-        for (let i = 1; i < rows.length; i++) {
-            const r = rows[i];
-            const slot = r[0];
-            if (seenSlots.has(slot)) continue;
-            seenSlots.add(slot);
-            snapshot[slot] = r[1]; // old_data 字符串
-        }
-        return snapshot;
-    } catch (e) {
-        logger.error("获取容器快照失败: " + e);
-        return {};
     }
 }
 
@@ -385,5 +494,9 @@ module.exports = {
     createInitialSuperToken,
     getSession: () => session,
     closeDatabase,
-    getContainerSnapshot
+    getContainerSnapshot,
+    uidToName,
+    nameToUid,
+    resolveTypeInJson,
+    replaceTypeWithUid
 };
