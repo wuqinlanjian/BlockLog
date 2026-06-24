@@ -1,19 +1,9 @@
 // modules/events.js
-const { insertOperation } = require("./database");
-const { getConsumer, inspectPlayers, formatRecord } = require("./command"); 
-const { queryOperations } = require("./database");    
+const { insertOperation, nameToUid } = require("./database.js");
+const { getConsumer, inspectPlayers, formatRecord } = require("./command.js"); 
+const { queryOperations } = require("./database.js");    
 
 let _inspectClickCount = {};
-const actionMap = {
-    place: { desc: "放置方块" },
-    destroy: { desc: "破坏方块" },
-    explode_block: { desc: "爆炸破坏" },
-    container_change: { desc: "容器变动" },
-    inventory_change: { desc: "物品栏变动" },
-    pickup: { desc: "捡起物品" },
-    drop: { desc: "丢出物品" },
-    liquid_react: { desc: "液体反应" }
-};
 
 function isPlayerReady(player) {
     return player && !player.isLoading;
@@ -28,6 +18,7 @@ function posToObj(pos) {
     };
 }
 
+// 修改：将 type 转换为 uid 再存入 JSON
 function blockToData(block) {
     const blockNbt = block.getNbt();
     const be = block.getBlockEntity();
@@ -37,8 +28,8 @@ function blockToData(block) {
         if (beNbt) beNbtSnbt = beNbt.toSNBT();
     }
     return JSON.stringify({
-        name: block.name,
-        type: block.type,
+        name: block.name,              // name 暂不转uid，仅type转
+        type: nameToUid(block.type),
         tileData: block.tileData,
         nbt: blockNbt?.toSNBT() || "",
         beNbt: beNbtSnbt
@@ -49,7 +40,7 @@ function itemToData(item) {
     if (!item || item.isNull()) return "";
     return JSON.stringify({
         name: item.name,
-        type: item.type,
+        type: nameToUid(item.type),
         count: item.count,
         aux: item.aux,
         damage: item.damage,
@@ -92,7 +83,6 @@ function registerEvents() {
         }
     });
 
-
     mc.listen("onContainerChange", (player, container, slot, oldItem, newItem) => {
         if (!getConsumer() || !isPlayerReady(player)) return;
 
@@ -101,10 +91,9 @@ function registerEvents() {
             const cb = mc.getBlock(container.pos.x, container.pos.y, container.pos.z, container.pos.dimid);
             if (cb) {
                 blockInfo = {
-                    name: cb.name, 
-                    type: cb.type,
+                    name: cb.name,
+                    type: nameToUid(cb.type),  // 容器类型也转uid
                     tileData: cb.tileData
-
                 };
             }
         }
@@ -122,7 +111,6 @@ function registerEvents() {
             extra: JSON.stringify(blockInfo)
         });
     });
-
 
     mc.listen("onInventoryChange", (player, slot, oldItem, newItem) => {
         if (!getConsumer() || !isPlayerReady(player)) return;
@@ -153,7 +141,6 @@ function registerEvents() {
         });
     });
 
-
     mc.listen("onDropItem", (player, item) => {
         if (!getConsumer() || !isPlayerReady(player)) return;
         insertOperation({
@@ -168,7 +155,6 @@ function registerEvents() {
         });
     });
 
-
     mc.listen("onBlockExploded", (block, source) => {
         if (!getConsumer()) return;
         insertOperation({
@@ -182,7 +168,6 @@ function registerEvents() {
             time: system.getTimeStr()
         });
     });
-
 
     mc.listen("onUseBucketTake", (player, item, target, side, pos) => {
         if (!getConsumer() || !isPlayerReady(player)) return;
@@ -199,7 +184,6 @@ function registerEvents() {
             });
         }
     });
-
 
     mc.listen("onBlockChanged", (beforeBlock, afterBlock) => {
         if (!getConsumer()) return;
@@ -228,7 +212,6 @@ function registerEvents() {
             showInspectInfo(player, block.pos);
             return;
         }
-    
         _inspectClickCount[player.xuid] = (_inspectClickCount[player.xuid] || 0) + 1;
         if (_inspectClickCount[player.xuid] >= 10) {
             _inspectClickCount[player.xuid] = 0;
@@ -251,19 +234,6 @@ function showInspectInfo(player, pos) {
     } else {
         player.tell(`§7[监察] (${pos.x},${pos.y},${pos.z}) 暂无操作记录`);
     }
-}
-
-function relativeTime(timestamp) {
-    const now = Date.now();
-    const then = new Date(timestamp.replace(" ", "T")).getTime();
-    let diff = Math.floor((now - then) / 1000);
-    if (diff < 0) diff = 0;
-    if (diff < 60) return `${diff}秒前`;
-    const mins = Math.floor(diff / 60);
-    if (mins < 60) return `${mins}分钟前`;
-    const hours = Math.floor(mins / 60);
-    if (hours < 24) return `${hours}小时前`;
-    return `${Math.floor(hours / 24)}天前`;
 }
 
 module.exports = { registerEvents };
